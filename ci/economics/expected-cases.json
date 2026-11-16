@@ -1,0 +1,1313 @@
+{
+  "bazel_module_lock_sha256": "7b4c6e062cc56d7d9890a2e88fd3132421e57e307fd61e513f9724a27c31337f",
+  "packages": {
+    "packages/app_store/apple_app_store": {
+      "cases": [
+        {
+          "file": "test/scanner_zxing_test.dart",
+          "name": "Fake test",
+          "outcome": "pass"
+        }
+      ],
+      "suites": [
+        "test/scanner_zxing_test.dart"
+      ]
+    },
+    "packages/app_store/google_play": {
+      "cases": [
+        {
+          "file": "test/scanner_mlkit_test.dart",
+          "name": "Fake test",
+          "outcome": "pass"
+        }
+      ],
+      "suites": [
+        "test/scanner_mlkit_test.dart"
+      ]
+    },
+    "packages/app_store/shared": {
+      "cases": [
+        {
+          "file": "test/shared_test.dart",
+          "name": "Fake test",
+          "outcome": "pass"
+        }
+      ],
+      "suites": [
+        "test/shared_test.dart"
+      ]
+    },
+    "packages/app_store/uri_store": {
+      "cases": [
+        {
+          "file": "test/scanner_zxing_test.dart",
+          "name": "Fake test",
+          "outcome": "pass"
+        }
+      ],
+      "suites": [
+        "test/scanner_zxing_test.dart"
+      ]
+    },
+    "packages/scanner/ml_kit": {
+      "cases": [
+        {
+          "file": "test/scanner_ml_kit_test.dart",
+          "name": "Fake test",
+          "outcome": "pass"
+        }
+      ],
+      "suites": [
+        "test/scanner_ml_kit_test.dart"
+      ]
+    },
+    "packages/scanner/shared": {
+      "cases": [
+        {
+          "file": "test/shared_test.dart",
+          "name": "Fake test",
+          "outcome": "pass"
+        }
+      ],
+      "suites": [
+        "test/shared_test.dart"
+      ]
+    },
+    "packages/scanner/zxing": {
+      "cases": [
+        {
+          "file": "test/scanner_zxing_test.dart",
+          "name": "Fake test",
+          "outcome": "pass"
+        }
+      ],
+      "suites": [
+        "test/scanner_zxing_test.dart"
+      ]
+    },
+    "packages/smooth_app": {
+      "cases": [
+        {
+          "file": "test/widget_test.dart",
+          "name": "Fake test",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/pages/generic_lib/widgets/smooth_error_card_test.dart",
+          "name": "SmoothErrorCard exist",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/pages/generic_lib/widgets/smooth_error_card_test.dart",
+          "name": "SmoothErrorCard doesnt find the error message",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/pages/generic_lib/widgets/smooth_error_card_test.dart",
+          "name": "SmoothErrorCard find error message",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/pages/user_preferences_page_test.dart",
+          "name": "UserPreferencesPage looks as expected Light",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/pages/user_preferences_page_test.dart",
+          "name": "UserPreferencesPage looks as expected Dark",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/helpers/barcode_utils_test.dart",
+          "name": "isBarcode - Traditional numeric barcodes Valid 8-digit barcode",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/helpers/barcode_utils_test.dart",
+          "name": "isBarcode - Traditional numeric barcodes Valid 13-digit barcode (EAN-13)",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/helpers/barcode_utils_test.dart",
+          "name": "isBarcode - Traditional numeric barcodes Valid 12-digit barcode (UPC-A)",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/helpers/barcode_utils_test.dart",
+          "name": "isBarcode - Traditional numeric barcodes Valid 14-digit barcode (GTIN-14)",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/helpers/barcode_utils_test.dart",
+          "name": "isBarcode - Traditional numeric barcodes Valid long numeric barcode",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/helpers/barcode_utils_test.dart",
+          "name": "isBarcode - Traditional numeric barcodes Invalid 7-digit numeric string",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/helpers/barcode_utils_test.dart",
+          "name": "isBarcode - Traditional numeric barcodes Invalid numeric string with letters",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/helpers/barcode_utils_test.dart",
+          "name": "isBarcode - Traditional numeric barcodes Invalid numeric string with spaces",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/helpers/barcode_utils_test.dart",
+          "name": "isBarcode - Traditional numeric barcodes Invalid numeric string with special characters",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/helpers/barcode_utils_test.dart",
+          "name": "isBarcode - GS1 barcodes with FNC1 characters Valid GS1 barcode with \\x1D FNC1 character",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/helpers/barcode_utils_test.dart",
+          "name": "isBarcode - GS1 barcodes with FNC1 characters Valid GS1 barcode with \\u241D FNC1 character",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/helpers/barcode_utils_test.dart",
+          "name": "isBarcode - GS1 barcodes with FNC1 characters Valid GS1 barcode with multiple FNC1 characters",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/helpers/barcode_utils_test.dart",
+          "name": "isBarcode - GS1 barcodes with FNC1 characters Valid short string with FNC1 character",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/helpers/barcode_utils_test.dart",
+          "name": "isBarcode - GS1 barcodes with FNC1 characters Valid GS1 barcode with mixed FNC1 characters",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/helpers/barcode_utils_test.dart",
+          "name": "isBarcode - GS1 bracketed AI format Valid bracketed AI with 2-digit AI (GTIN)",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/helpers/barcode_utils_test.dart",
+          "name": "isBarcode - GS1 bracketed AI format Valid bracketed AI with expiration date",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/helpers/barcode_utils_test.dart",
+          "name": "isBarcode - GS1 bracketed AI format Valid bracketed AI with 3-digit AI",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/helpers/barcode_utils_test.dart",
+          "name": "isBarcode - GS1 bracketed AI format Valid bracketed AI with 4-digit AI",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/helpers/barcode_utils_test.dart",
+          "name": "isBarcode - GS1 bracketed AI format Valid complex bracketed AI format",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/helpers/barcode_utils_test.dart",
+          "name": "isBarcode - GS1 bracketed AI format Valid bracketed AI with alphanumeric values",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/helpers/barcode_utils_test.dart",
+          "name": "isBarcode - GS1 bracketed AI format Invalid bracketed format - missing closing bracket",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/helpers/barcode_utils_test.dart",
+          "name": "isBarcode - GS1 bracketed AI format Invalid bracketed format - missing opening bracket",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/helpers/barcode_utils_test.dart",
+          "name": "isBarcode - GS1 bracketed AI format Invalid bracketed format - empty AI",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/helpers/barcode_utils_test.dart",
+          "name": "isBarcode - GS1 bracketed AI format Invalid bracketed format - non-numeric AI",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/helpers/barcode_utils_test.dart",
+          "name": "isBarcode - GS1 bracketed AI format Invalid bracketed format - single digit AI",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/helpers/barcode_utils_test.dart",
+          "name": "isBarcode - GS1 bracketed AI format Invalid bracketed format - AI too long (5 digits)",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/helpers/barcode_utils_test.dart",
+          "name": "isBarcode - GS1 bracketed AI format Invalid bracketed format - empty value",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/helpers/barcode_utils_test.dart",
+          "name": "isBarcode - GS1 Digital Links Valid HTTPS Digital Link with GTIN in path",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/helpers/barcode_utils_test.dart",
+          "name": "isBarcode - GS1 Digital Links Valid HTTP Digital Link with GTIN in path",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/helpers/barcode_utils_test.dart",
+          "name": "isBarcode - GS1 Digital Links Valid Digital Link with multiple AIs in path",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/helpers/barcode_utils_test.dart",
+          "name": "isBarcode - GS1 Digital Links Valid Digital Link with AI in query parameter",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/helpers/barcode_utils_test.dart",
+          "name": "isBarcode - GS1 Digital Links Valid Digital Link with 3-digit AI",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/helpers/barcode_utils_test.dart",
+          "name": "isBarcode - GS1 Digital Links Valid Digital Link with 4-digit AI",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/helpers/barcode_utils_test.dart",
+          "name": "isBarcode - GS1 Digital Links Valid Digital Link with mixed path and query AIs",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/helpers/barcode_utils_test.dart",
+          "name": "isBarcode - GS1 Digital Links Invalid Digital Link - no AI pattern in path",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/helpers/barcode_utils_test.dart",
+          "name": "isBarcode - GS1 Digital Links Invalid Digital Link - AI but no value in path",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/helpers/barcode_utils_test.dart",
+          "name": "isBarcode - GS1 Digital Links Invalid Digital Link - single digit AI",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/helpers/barcode_utils_test.dart",
+          "name": "isBarcode - GS1 Digital Links Invalid Digital Link - 5-digit AI",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/helpers/barcode_utils_test.dart",
+          "name": "isBarcode - GS1 Digital Links Invalid URL - not a valid URL",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/pages/user_preferences_page_test.dart",
+          "name": "UserPreferencesPage looks as expected AMOLED",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/helpers/barcode_utils_test.dart",
+          "name": "isBarcode - GS1 Digital Links Invalid URL - no AI in query parameter values",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/helpers/barcode_utils_test.dart",
+          "name": "isBarcode - Edge cases Empty string",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/helpers/barcode_utils_test.dart",
+          "name": "isBarcode - Edge cases String with only spaces",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/helpers/barcode_utils_test.dart",
+          "name": "isBarcode - Edge cases String with leading spaces (trimmed to valid barcode)",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/helpers/barcode_utils_test.dart",
+          "name": "isBarcode - Edge cases String with leading spaces (trimmed to invalid string)",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/helpers/barcode_utils_test.dart",
+          "name": "isBarcode - Edge cases String with newlines",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/helpers/barcode_utils_test.dart",
+          "name": "isBarcode - Edge cases String with tabs",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/helpers/barcode_utils_test.dart",
+          "name": "isBarcode - Edge cases Mixed format - numeric followed by bracketed",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/helpers/barcode_utils_test.dart",
+          "name": "isBarcode - Edge cases Mixed format - URL-like string without proper structure",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/helpers/barcode_utils_test.dart",
+          "name": "isBarcode - Edge cases Very long numeric barcode",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/helpers/barcode_utils_test.dart",
+          "name": "isBarcode - Edge cases Null-like string value",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/helpers/barcode_utils_test.dart",
+          "name": "isBarcode - Edge cases Boolean-like string value",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/helpers/barcode_utils_test.dart",
+          "name": "isBarcode - Edge cases Floating point number string",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/helpers/barcode_utils_test.dart",
+          "name": "isBarcode - Edge cases Negative number string",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/helpers/barcode_utils_test.dart",
+          "name": "isBarcode - Edge cases Barcode with leading zeros",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/helpers/barcode_utils_test.dart",
+          "name": "isBarcode - Edge cases GS1 Digital Link with fragment",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/helpers/barcode_utils_test.dart",
+          "name": "isBarcode - Edge cases GS1 Digital Link with port",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/helpers/barcode_utils_test.dart",
+          "name": "isBarcode - Edge cases Case sensitivity - HTTPS uppercase",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/smooth_ui_library/animations/smooth_reveal_animation_test.dart",
+          "name": "SmoothRevealAnimation doesn't use AnimationController after dispose",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/smooth_ui_library/dialogs/smooth_category_picker_test.dart",
+          "name": "SmoothCategoryPicker can navigate",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/smooth_ui_library/dialogs/smooth_category_picker_test.dart",
+          "name": "SmoothCategoryPicker can set category List",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/smooth_ui_library/dialogs/smooth_category_picker_test.dart",
+          "name": "SmoothCategoryPicker can create new categories",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/smooth_ui_library/dialogs/smooth_category_picker_test.dart",
+          "name": "SmoothCategoryPicker can remove categories",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/smooth_ui_library/dialogs/smooth_category_picker_test.dart",
+          "name": "SmoothCategoryDisplay can toggle deletable",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/smooth_ui_library/dialogs/smooth_category_picker_test.dart",
+          "name": "SmoothCategoryDisplay can delete",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/smooth_ui_library/basic_test.dart",
+          "name": "Alert dialog can be created",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/plural_translation_test.dart",
+          "name": "Localization tests plural test aa",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/plural_translation_test.dart",
+          "name": "Localization tests plural test af",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/plural_translation_test.dart",
+          "name": "Localization tests plural test ak",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/plural_translation_test.dart",
+          "name": "Localization tests plural test am",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/plural_translation_test.dart",
+          "name": "Localization tests plural test ar",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/plural_translation_test.dart",
+          "name": "Localization tests plural test as",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/plural_translation_test.dart",
+          "name": "Localization tests plural test az",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/plural_translation_test.dart",
+          "name": "Localization tests plural test be",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/plural_translation_test.dart",
+          "name": "Localization tests plural test bg",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/plural_translation_test.dart",
+          "name": "Localization tests plural test bm",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/plural_translation_test.dart",
+          "name": "Localization tests plural test bn",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/plural_translation_test.dart",
+          "name": "Localization tests plural test bo",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/plural_translation_test.dart",
+          "name": "Localization tests plural test br",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/plural_translation_test.dart",
+          "name": "Localization tests plural test bs",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/plural_translation_test.dart",
+          "name": "Localization tests plural test ca",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/plural_translation_test.dart",
+          "name": "Localization tests plural test ce",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/plural_translation_test.dart",
+          "name": "Localization tests plural test co",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/plural_translation_test.dart",
+          "name": "Localization tests plural test cs",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/plural_translation_test.dart",
+          "name": "Localization tests plural test cv",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/plural_translation_test.dart",
+          "name": "Localization tests plural test cy",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/plural_translation_test.dart",
+          "name": "Localization tests plural test da",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/plural_translation_test.dart",
+          "name": "Localization tests plural test de",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/plural_translation_test.dart",
+          "name": "Localization tests plural test el",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/plural_translation_test.dart",
+          "name": "Localization tests plural test en",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/plural_translation_test.dart",
+          "name": "Localization tests plural test eo",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/plural_translation_test.dart",
+          "name": "Localization tests plural test es",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/plural_translation_test.dart",
+          "name": "Localization tests plural test et",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/plural_translation_test.dart",
+          "name": "Localization tests plural test eu",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/plural_translation_test.dart",
+          "name": "Localization tests plural test fa",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/plural_translation_test.dart",
+          "name": "Localization tests plural test fi",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/plural_translation_test.dart",
+          "name": "Localization tests plural test fo",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/plural_translation_test.dart",
+          "name": "Localization tests plural test fr",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/plural_translation_test.dart",
+          "name": "Localization tests plural test ga",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/plural_translation_test.dart",
+          "name": "Localization tests plural test gd",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/plural_translation_test.dart",
+          "name": "Localization tests plural test gl",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/plural_translation_test.dart",
+          "name": "Localization tests plural test gu",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/plural_translation_test.dart",
+          "name": "Localization tests plural test ha",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/plural_translation_test.dart",
+          "name": "Localization tests plural test he",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/plural_translation_test.dart",
+          "name": "Localization tests plural test hi",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/plural_translation_test.dart",
+          "name": "Localization tests plural test hr",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/plural_translation_test.dart",
+          "name": "Localization tests plural test ht",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/plural_translation_test.dart",
+          "name": "Localization tests plural test hu",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/plural_translation_test.dart",
+          "name": "Localization tests plural test hy",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/plural_translation_test.dart",
+          "name": "Localization tests plural test id",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/plural_translation_test.dart",
+          "name": "Localization tests plural test ii",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/plural_translation_test.dart",
+          "name": "Localization tests plural test is",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/plural_translation_test.dart",
+          "name": "Localization tests plural test it",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/plural_translation_test.dart",
+          "name": "Localization tests plural test iu",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/plural_translation_test.dart",
+          "name": "Localization tests plural test ja",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/plural_translation_test.dart",
+          "name": "Localization tests plural test jv",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/plural_translation_test.dart",
+          "name": "Localization tests plural test ka",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/plural_translation_test.dart",
+          "name": "Localization tests plural test kk",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/plural_translation_test.dart",
+          "name": "Localization tests plural test km",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/plural_translation_test.dart",
+          "name": "Localization tests plural test kn",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/plural_translation_test.dart",
+          "name": "Localization tests plural test ko",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/plural_translation_test.dart",
+          "name": "Localization tests plural test ku",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/plural_translation_test.dart",
+          "name": "Localization tests plural test kw",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/plural_translation_test.dart",
+          "name": "Localization tests plural test ky",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/plural_translation_test.dart",
+          "name": "Localization tests plural test la",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/plural_translation_test.dart",
+          "name": "Localization tests plural test lb",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/plural_translation_test.dart",
+          "name": "Localization tests plural test lo",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/plural_translation_test.dart",
+          "name": "Localization tests plural test lt",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/plural_translation_test.dart",
+          "name": "Localization tests plural test lv",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/plural_translation_test.dart",
+          "name": "Localization tests plural test mg",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/plural_translation_test.dart",
+          "name": "Localization tests plural test mi",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/plural_translation_test.dart",
+          "name": "Localization tests plural test ml",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/plural_translation_test.dart",
+          "name": "Localization tests plural test mn",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/plural_translation_test.dart",
+          "name": "Localization tests plural test mr",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/plural_translation_test.dart",
+          "name": "Localization tests plural test ms",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/plural_translation_test.dart",
+          "name": "Localization tests plural test mt",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/plural_translation_test.dart",
+          "name": "Localization tests plural test my",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/plural_translation_test.dart",
+          "name": "Localization tests plural test nb",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/plural_translation_test.dart",
+          "name": "Localization tests plural test ne",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/plural_translation_test.dart",
+          "name": "Localization tests plural test nl",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/plural_translation_test.dart",
+          "name": "Localization tests plural test nn",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/plural_translation_test.dart",
+          "name": "Localization tests plural test no",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/plural_translation_test.dart",
+          "name": "Localization tests plural test nr",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/plural_translation_test.dart",
+          "name": "Localization tests plural test oc",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/plural_translation_test.dart",
+          "name": "Localization tests plural test or",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/plural_translation_test.dart",
+          "name": "Localization tests plural test pa",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/plural_translation_test.dart",
+          "name": "Localization tests plural test pl",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/plural_translation_test.dart",
+          "name": "Localization tests plural test pt",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/plural_translation_test.dart",
+          "name": "Localization tests plural test pt_BR",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/plural_translation_test.dart",
+          "name": "Localization tests plural test qu",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/plural_translation_test.dart",
+          "name": "Localization tests plural test rm",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/plural_translation_test.dart",
+          "name": "Localization tests plural test ro",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/plural_translation_test.dart",
+          "name": "Localization tests plural test ru",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/plural_translation_test.dart",
+          "name": "Localization tests plural test sa",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/plural_translation_test.dart",
+          "name": "Localization tests plural test sc",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/plural_translation_test.dart",
+          "name": "Localization tests plural test sd",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/plural_translation_test.dart",
+          "name": "Localization tests plural test sg",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/plural_translation_test.dart",
+          "name": "Localization tests plural test si",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/plural_translation_test.dart",
+          "name": "Localization tests plural test sk",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/plural_translation_test.dart",
+          "name": "Localization tests plural test sl",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/plural_translation_test.dart",
+          "name": "Localization tests plural test sn",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/plural_translation_test.dart",
+          "name": "Localization tests plural test so",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/plural_translation_test.dart",
+          "name": "Localization tests plural test sq",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/plural_translation_test.dart",
+          "name": "Localization tests plural test sr",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/plural_translation_test.dart",
+          "name": "Localization tests plural test ss",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/plural_translation_test.dart",
+          "name": "Localization tests plural test st",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/plural_translation_test.dart",
+          "name": "Localization tests plural test sv",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/plural_translation_test.dart",
+          "name": "Localization tests plural test sw",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/plural_translation_test.dart",
+          "name": "Localization tests plural test ta",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/plural_translation_test.dart",
+          "name": "Localization tests plural test te",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/plural_translation_test.dart",
+          "name": "Localization tests plural test tg",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/plural_translation_test.dart",
+          "name": "Localization tests plural test th",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/plural_translation_test.dart",
+          "name": "Localization tests plural test ti",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/plural_translation_test.dart",
+          "name": "Localization tests plural test tl",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/plural_translation_test.dart",
+          "name": "Localization tests plural test tn",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/plural_translation_test.dart",
+          "name": "Localization tests plural test tr",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/plural_translation_test.dart",
+          "name": "Localization tests plural test ts",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/plural_translation_test.dart",
+          "name": "Localization tests plural test tt",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/plural_translation_test.dart",
+          "name": "Localization tests plural test tw",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/plural_translation_test.dart",
+          "name": "Localization tests plural test ty",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/plural_translation_test.dart",
+          "name": "Localization tests plural test ug",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/plural_translation_test.dart",
+          "name": "Localization tests plural test uk",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/plural_translation_test.dart",
+          "name": "Localization tests plural test ur",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/plural_translation_test.dart",
+          "name": "Localization tests plural test uz",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/plural_translation_test.dart",
+          "name": "Localization tests plural test ve",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/plural_translation_test.dart",
+          "name": "Localization tests plural test vi",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/plural_translation_test.dart",
+          "name": "Localization tests plural test wa",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/plural_translation_test.dart",
+          "name": "Localization tests plural test wo",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/plural_translation_test.dart",
+          "name": "Localization tests plural test xh",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/plural_translation_test.dart",
+          "name": "Localization tests plural test yi",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/plural_translation_test.dart",
+          "name": "Localization tests plural test yo",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/plural_translation_test.dart",
+          "name": "Localization tests plural test zh",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/plural_translation_test.dart",
+          "name": "Localization tests plural test zh_CN",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/plural_translation_test.dart",
+          "name": "Localization tests plural test zu",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/dialogs/generic_lib/dialogs_test.dart",
+          "name": "Dialogs on Contribute Page looks as expected Improving_Page_Light_Theme",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/dialogs/generic_lib/dialogs_test.dart",
+          "name": "Dialogs on Contribute Page looks as expected Improving_Page_Dark_Theme",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/dialogs/generic_lib/dialogs_test.dart",
+          "name": "Dialogs on Contribute Page looks as expected Improving_Page_AMOLED_Theme",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/basic_test.dart",
+          "name": "App Starts",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/bottom_sheets/generic_lib/bottom_sheets_test.dart",
+          "name": "Bottom Sheets on Contribute Page looks as expected Software development_Page_Light_Theme",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/bottom_sheets/generic_lib/bottom_sheets_test.dart",
+          "name": "Bottom Sheets on Contribute Page looks as expected Translate_Page_Light_Theme",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/bottom_sheets/generic_lib/bottom_sheets_test.dart",
+          "name": "Bottom Sheets on Contribute Page looks as expected Software development_Page_Dark_Theme",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/bottom_sheets/generic_lib/bottom_sheets_test.dart",
+          "name": "Bottom Sheets on Contribute Page looks as expected Translate_Page_Dark_Theme",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/users/login_page_layout_test.dart",
+          "name": "LoginPage looks as expected Light",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/users/login_page_layout_test.dart",
+          "name": "LoginPage looks as expected Dark",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/bottom_sheets/generic_lib/bottom_sheets_test.dart",
+          "name": "Bottom Sheets on Contribute Page looks as expected Software development_Page_AMOLED_Theme",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/users/login_page_layout_test.dart",
+          "name": "LoginPage looks as expected AMOLED",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/bottom_sheets/generic_lib/bottom_sheets_test.dart",
+          "name": "Bottom Sheets on Contribute Page looks as expected Translate_Page_AMOLED_Theme",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/users/forgot_password_page_layout_test.dart",
+          "name": "Password Reset Page looks as expected Light",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/users/forgot_password_page_layout_test.dart",
+          "name": "Password Reset Page looks as expected Dark",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/users/forgot_password_page_layout_test.dart",
+          "name": "Password Reset Page looks as expected AMOLED",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/users/signup_page_layout_test.dart",
+          "name": "LoginPage looks as expected Light",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/users/signup_page_layout_test.dart",
+          "name": "LoginPage looks as expected Dark",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/users/signup_page_layout_test.dart",
+          "name": "LoginPage looks as expected AMOLED",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/utils/smooth_text_test.dart",
+          "name": "Smooth text String extension Remove diacritics (oeuf)",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/utils/smooth_text_test.dart",
+          "name": "Smooth text String extension Comparison Safe String",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/utils/string_extensions_test.dart",
+          "name": "indexesOf tests Multiple occurrences (with case)",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/utils/string_extensions_test.dart",
+          "name": "indexesOf tests Multiple occurrence (without case)",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/utils/string_extensions_test.dart",
+          "name": "indexesOf tests No occurrence (without case)",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/utils/string_extensions_test.dart",
+          "name": "indexesOf tests Multiple occurrences (without case)",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/utils/string_extensions_test.dart",
+          "name": "indexesOf tests No occurrence",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/utils/string_extensions_test.dart",
+          "name": "removeCharacterAt tests Position 0",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/utils/string_extensions_test.dart",
+          "name": "removeCharacterAt tests Position 1",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/utils/string_extensions_test.dart",
+          "name": "removeCharacterAt tests Last position",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/utils/string_extensions_test.dart",
+          "name": "removeCharacterAt tests incorrect position (negative)",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/utils/string_extensions_test.dart",
+          "name": "removeCharacterAt tests incorrect position (> text length)",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/utils/string_extensions_test.dart",
+          "name": "replaceAllIgnoreFirst tests No replacement (first)",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/utils/string_extensions_test.dart",
+          "name": "replaceAllIgnoreFirst tests 1 replacement",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/utils/string_extensions_test.dart",
+          "name": "replaceAllIgnoreFirst tests 2 replacements",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/utils/string_extensions_test.dart",
+          "name": "removeEmptySpaces tests Empty string",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/utils/string_extensions_test.dart",
+          "name": "removeEmptySpaces tests String with only spaces",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/utils/string_extensions_test.dart",
+          "name": "removeEmptySpaces tests String with spaces at the beginning",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/utils/string_extensions_test.dart",
+          "name": "removeEmptySpaces tests String with spaces at the middle",
+          "outcome": "pass"
+        },
+        {
+          "file": "test/utils/string_extensions_test.dart",
+          "name": "removeEmptySpaces tests String with spaces at the end",
+          "outcome": "pass"
+        }
+      ],
+      "suites": [
+        "test/basic_test.dart",
+        "test/bottom_sheets/generic_lib/bottom_sheets_test.dart",
+        "test/dialogs/generic_lib/dialogs_test.dart",
+        "test/helpers/barcode_utils_test.dart",
+        "test/pages/generic_lib/widgets/smooth_error_card_test.dart",
+        "test/pages/user_preferences_page_test.dart",
+        "test/plural_translation_test.dart",
+        "test/smooth_ui_library/animations/smooth_reveal_animation_test.dart",
+        "test/smooth_ui_library/basic_test.dart",
+        "test/smooth_ui_library/dialogs/smooth_category_picker_test.dart",
+        "test/users/forgot_password_page_layout_test.dart",
+        "test/users/login_page_layout_test.dart",
+        "test/users/signup_page_layout_test.dart",
+        "test/utils/smooth_text_test.dart",
+        "test/utils/string_extensions_test.dart",
+        "test/widget_test.dart"
+      ]
+    }
+  },
+  "schema": 1,
+  "source": {
+    "artifact": "host-correctness-1",
+    "module_lock_sha256": "7b4c6e062cc56d7d9890a2e88fd3132421e57e307fd61e513f9724a27c31337f",
+    "run": 43924743585
+  },
+  "total_cases": 246
+}
