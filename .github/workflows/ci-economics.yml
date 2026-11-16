@@ -1,0 +1,85 @@
+name: CI feasibility
+
+on:
+  push:
+    branches: [prototype/ci-economics]
+    paths:
+      - '.github/workflows/ci-economics.yml'
+      - 'ci/economics/**'
+      - 'MODULE.bazel'
+      - '.bazelversion'
+      - 'packages/**'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-feasibility-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  feasibility:
+    name: ${{ matrix.engine }} feasibility
+    if: github.repository == 'Sameri11/smooth-app'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        engine: [flutter, bazel]
+    env:
+      CI: 'true'
+      FLUTTER_SUPPRESS_ANALYTICS: 'true'
+      FLUTTER_VERSION: 3.41.8
+      FLUTTER_SHA256: 0c7e47fc39ef86290b41707d687bdca7f82b277267a6ef74717f8e88ac423de1
+      RULES_REVISION: bf7cfa24443db40d342cc48d565bdc34925f9466
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Check out pinned rules
+        if: matrix.engine == 'bazel'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: Sameri11/rules_flutter
+          ref: bf7cfa24443db40d342cc48d565bdc34925f9466
+          path: .ci-rules
+          persist-credentials: false
+      - name: Install checksum-verified Flutter
+        shell: bash
+        run: |
+          set -euo pipefail
+          started=$SECONDS
+          archive="$RUNNER_TEMP/flutter.tar.xz"
+          curl --fail --location --output "$archive" \
+            "https://storage.googleapis.com/flutter_infra_release/releases/stable/linux/flutter_linux_${FLUTTER_VERSION}-stable.tar.xz"
+          printf '%s  %s\n' "$FLUTTER_SHA256" "$archive" | sha256sum --check
+          tar -xJf "$archive" -C "$RUNNER_TEMP"
+          rm "$archive"
+          echo "FLUTTER_ROOT=$RUNNER_TEMP/flutter" >> "$GITHUB_ENV"
+          echo "$RUNNER_TEMP/flutter/bin" >> "$GITHUB_PATH"
+          test "$(git -C "$RUNNER_TEMP/flutter" rev-parse HEAD)" = 02085feb3f5d8a8156e5e28512b9d99351d510c0
+          "$RUNNER_TEMP/flutter/bin/flutter" --version
+          printf 'Flutter setup: %ss\n' "$((SECONDS-started))" >> "$GITHUB_STEP_SUMMARY"
+      - name: Install checksum-verified Bazelisk
+        if: matrix.engine == 'bazel'
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --location --output "$RUNNER_TEMP/bazel" \
+            https://github.com/bazelbuild/bazelisk/releases/download/v1.29.0/bazelisk-linux-amd64
+          echo "5a408715e932c0250d28bd84555f12edbf70117de42f9181691c736eacc4a992  $RUNNER_TEMP/bazel" | sha256sum --check
+          chmod +x "$RUNNER_TEMP/bazel"
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+      - name: Run original-source feasibility probe
+        shell: bash
+        run: python3 ci/economics/probe.py '${{ matrix.engine }}'
+      - name: Retain compact evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: feasibility-${{ matrix.engine }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/smooth-ci-evidence
+          retention-days: 1
+          if-no-files-found: warn

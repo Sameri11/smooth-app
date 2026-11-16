@@ -13,6 +13,7 @@ on:
 
 jobs:
   main:
+    if: github.repository_owner == 'openfoodfacts'
     runs-on: ubuntu-slim
     steps:
       - name: Check for merge conflicts
