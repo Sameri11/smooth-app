@@ -27,7 +27,7 @@ jobs:
       fail-fast: false
       max-parallel: 1
       matrix:
-        engine: [flutter, bazel]
+        engine: [flutter-resolve]
     env:
       CI: 'true'
       FLUTTER_SUPPRESS_ANALYTICS: 'true'
