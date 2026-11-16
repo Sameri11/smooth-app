@@ -1,4 +1,27 @@
-exports_files([
-    "pubspec.yaml",
-    "pubspec.lock",
-])
+load("@rules_flutter_android//flutter:defs.bzl", "FLUTTER_ANDROID")
+load("@rules_flutter_core//flutter:defs.bzl", "flutter_core", "flutter_test_suite")
+
+package(default_visibility = ["//visibility:public"])
+
+exports_files(["pubspec.lock"])
+
+# The generated host-test package includes the pubspec's asset bundle.
+flutter_core(
+    name = "app",
+    path_deps = [
+        "//packages/app_store/apple_app_store:srcs",
+        "//packages/app_store/google_play:srcs",
+        "//packages/app_store/shared:srcs",
+        "//packages/app_store/uri_store:srcs",
+        "//packages/scanner/ml_kit:srcs",
+        "//packages/scanner/shared:srcs",
+        "//packages/scanner/zxing:srcs",
+    ],
+    platforms = [FLUTTER_ANDROID],
+    pub = "@pub_smooth_app",
+)
+
+flutter_test_suite(
+    name = "tests",
+    package = ":app_test_package",
+)

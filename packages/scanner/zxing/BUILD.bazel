@@ -1,0 +1,24 @@
+load("@rules_flutter_core//flutter:defs.bzl", "flutter_package", "flutter_pubspec", "flutter_test_suite")
+
+package(default_visibility = ["//visibility:public"])
+
+exports_files(["pubspec.lock"])
+
+flutter_pubspec()
+
+filegroup(
+    name = "srcs",
+    srcs = glob(["lib/**/*.dart"]),
+)
+
+flutter_package(
+    name = "package",
+    path_deps = ["//packages/scanner/shared:srcs"],
+    pub = "@pub_zxing",
+    pubspec = ":pubspec",
+)
+
+flutter_test_suite(
+    name = "tests",
+    package = ":package",
+)

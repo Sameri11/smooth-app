@@ -9,12 +9,56 @@ local_path_override(
     path = ".ci-rules/rules_flutter_core",
 )
 
+bazel_dep(name = "sameri11_rules_flutter_android", version = "0.1.0", repo_name = "rules_flutter_android")
+local_path_override(
+    module_name = "sameri11_rules_flutter_android",
+    path = ".ci-rules/rules_flutter_android",
+)
+
 flutter = use_extension("@rules_flutter_core//flutter:extensions.bzl", "flutter")
 flutter.sdk(version = "3.41.8")
 
 pub = use_extension("@rules_flutter_core//flutter:extensions.bzl", "pub")
 pub.lock(
-    name = "pub",
+    name = "pub_apple_app_store",
+    lock = "//packages/app_store/apple_app_store:pubspec.lock",
+)
+pub.lock(
+    name = "pub_google_play",
+    lock = "//packages/app_store/google_play:pubspec.lock",
+)
+pub.lock(
+    name = "pub_app_store_shared",
+    lock = "//packages/app_store/shared:pubspec.lock",
+)
+pub.lock(
+    name = "pub_uri_store",
+    lock = "//packages/app_store/uri_store:pubspec.lock",
+)
+pub.lock(
+    name = "pub_ml_kit",
+    lock = "//packages/scanner/ml_kit:pubspec.lock",
+)
+pub.lock(
+    name = "pub_scanner_shared",
+    lock = "//packages/scanner/shared:pubspec.lock",
+)
+pub.lock(
+    name = "pub_zxing",
+    lock = "//packages/scanner/zxing:pubspec.lock",
+)
+pub.lock(
+    name = "pub_smooth_app",
     lock = "//packages/smooth_app:pubspec.lock",
 )
-use_repo(pub, "pub")
+use_repo(
+    pub,
+    "pub_app_store_shared",
+    "pub_apple_app_store",
+    "pub_google_play",
+    "pub_ml_kit",
+    "pub_scanner_shared",
+    "pub_smooth_app",
+    "pub_uri_store",
+    "pub_zxing",
+)
