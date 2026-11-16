@@ -54,7 +54,8 @@ def main():
         directory = ROOT / package
         for name in ("pubspec.yaml", "pubspec.lock"):
             path = directory / name
-            inputs[str(path.relative_to(ROOT))] = digest(path)
+            inputs[str(path.relative_to(ROOT))] = (
+                digest(path) if name == "pubspec.yaml" or path.exists() else None)
         test_root = directory / "test"
         inventory[package] = {
             "upstream_default": sorted(str(p.relative_to(directory))
@@ -72,8 +73,10 @@ def main():
     if engine == "flutter":
         for index, package in enumerate(PACKAGES):
             directory = ROOT / package
-            phase = run("pub-%02d" % index,
-                        ["flutter", "pub", "get", "--enforce-lockfile"], directory)
+            command = ["flutter", "pub", "get"]
+            if inputs[package + "/pubspec.lock"] is not None:
+                command.append("--enforce-lockfile")
+            phase = run("pub-%02d" % index, command, directory)
             report["phases"].append({"package": package, **phase})
             if phase["exit_code"]:
                 failure = True
@@ -91,9 +94,19 @@ def main():
         ], ROOT)
         report["phases"].append(phase)
         failure = phase["exit_code"] != 0
-    report["inputs_after"] = {name: digest(ROOT / name) for name in inputs}
-    report["input_drift"] = [name for name in inputs
-                             if inputs[name] != report["inputs_after"][name]]
+    report["inputs_after"] = {
+        name: digest(ROOT / name) if (ROOT / name).exists() else None for name in inputs}
+    report["generated_locks"] = [
+        name for name in inputs
+        if inputs[name] is None and report["inputs_after"][name] is not None]
+    report["input_drift"] = [
+        name for name in inputs
+        if inputs[name] is not None and inputs[name] != report["inputs_after"][name]]
+    for name in inputs:
+        if name.endswith("/pubspec.lock") and (ROOT / name).exists():
+            destination = OUT / "resolved-locks" / name
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_bytes((ROOT / name).read_bytes())
     failure = failure or bool(report["input_drift"])
     report["exit_code"] = int(failure)
     (OUT / "result.json").write_text(json.dumps(report, indent=2) + "\n")
