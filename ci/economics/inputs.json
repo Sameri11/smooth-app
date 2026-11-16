@@ -1,0 +1,46 @@
+{
+  "schema": 1,
+  "rules": {
+    "repository": "Sameri11/rules_flutter",
+    "revision": "6ab5ab906916abfdbd80d8a843bee87df500766d"
+  },
+  "app": {
+    "repository": "Sameri11/smooth-app",
+    "baseline": "a286f0a932e28f4b15a3b03e6dc9eff9c14f35b1"
+  },
+  "flutter": {
+    "version": "3.41.8",
+    "revision": "02085feb3f5d8a8156e5e28512b9d99351d510c0"
+  },
+  "bazel": {
+    "version": "9.2.0"
+  },
+  "packages": [
+    "packages/app_store/apple_app_store",
+    "packages/app_store/google_play",
+    "packages/app_store/shared",
+    "packages/app_store/uri_store",
+    "packages/scanner/ml_kit",
+    "packages/scanner/shared",
+    "packages/scanner/zxing",
+    "packages/smooth_app"
+  ],
+  "inputs": {
+    "packages/app_store/apple_app_store/pubspec.yaml": "02eea7313a2a0d381ee4b1db42dc37c6a5718f3c2934308238c6451e067d1bb3",
+    "packages/app_store/apple_app_store/pubspec.lock": "143accd44e77e6ed81d2d210509909caadb4fa36050e3208d093bd77b42cc9d7",
+    "packages/app_store/google_play/pubspec.yaml": "b1d5f5244fb0953bfbcf147c6cd2aff6e68f3a76b34f6492997f109e066ed8f6",
+    "packages/app_store/google_play/pubspec.lock": "143accd44e77e6ed81d2d210509909caadb4fa36050e3208d093bd77b42cc9d7",
+    "packages/app_store/shared/pubspec.yaml": "453fe8cd284ffe49eab851ab2424c8b5e6d0c64c0783789e36be2227498780dc",
+    "packages/app_store/shared/pubspec.lock": "263759b2e47d515a6ad79ea80f20788facb161ed173a08d965bb9bd0dea8afd2",
+    "packages/app_store/uri_store/pubspec.yaml": "2ce3d8afec64a822003c442cbb360a9ff01c01f64e8f3f54cc5d060e0a8b9635",
+    "packages/app_store/uri_store/pubspec.lock": "5c5bbe632981693d59dc96f13ec7fbb637c4b3bc74fe961e663ccf6407fd7b73",
+    "packages/scanner/ml_kit/pubspec.yaml": "5c97594b302ab1bae0a10fa8ab8b3b8244a10480ef769b664168cce5123dd05d",
+    "packages/scanner/ml_kit/pubspec.lock": "7792ac1d8f52a5aec57ca2c9566496505a1643e9fe6b345ab05e0c4d579fc35a",
+    "packages/scanner/shared/pubspec.yaml": "2793044a1131f648880fbb195ec43ed6aaa7f864dc0f69e3674cc5f35b09c583",
+    "packages/scanner/shared/pubspec.lock": "8629727205088a674e8fc42a7eeb096b70726755edb2977b939c43a0bea6b02f",
+    "packages/scanner/zxing/pubspec.yaml": "656d5cffffd36729527e9fcffe9b4eaec282d298284fabe9d98fe25711670afa",
+    "packages/scanner/zxing/pubspec.lock": "fc3e3172896fff757d516ddb760483ebaa82ada92f597532d0978f7255f1e037",
+    "packages/smooth_app/pubspec.yaml": "07d7574a320e0ade099df8a71292fcf447bcf5cf9abd5a90cbae2ccb05b7fd9d",
+    "packages/smooth_app/pubspec.lock": "ccda53e2a76134e7ec4649028f716419f75422e5b362f3493f79866ddeca994b"
+  }
+}
