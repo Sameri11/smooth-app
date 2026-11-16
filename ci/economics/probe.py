@@ -44,9 +44,11 @@ def run(name, command, cwd):
 
 
 def main():
-    if len(sys.argv) != 2 or sys.argv[1] not in ("flutter", "bazel"):
-        raise SystemExit("usage: probe.py flutter|bazel")
+    if len(sys.argv) != 2 or sys.argv[1] not in ("flutter", "bazel", "flutter-resolve"):
+        raise SystemExit("usage: probe.py flutter|bazel|flutter-resolve")
     engine = sys.argv[1]
+    bootstrap = engine == "flutter-resolve"
+    selected_packages = ["packages/smooth_app"] if bootstrap else PACKAGES
     OUT.mkdir(parents=True, exist_ok=True)
     inputs = {}
     inventory = {}
@@ -69,12 +71,14 @@ def main():
               "workflow_revision": os.environ.get("GITHUB_SHA"),
               "runner_image": os.environ.get("ImageVersion"),
               "inputs_before": inputs, "test_inventory": inventory, "phases": []}
+    report["selected_packages"] = selected_packages
+    report["dependency_bootstrap"] = bootstrap
     failure = False
-    if engine == "flutter":
-        for index, package in enumerate(PACKAGES):
+    if engine in ("flutter", "flutter-resolve"):
+        for index, package in enumerate(selected_packages):
             directory = ROOT / package
             command = ["flutter", "pub", "get"]
-            if inputs[package + "/pubspec.lock"] is not None:
+            if not bootstrap and inputs[package + "/pubspec.lock"] is not None:
                 command.append("--enforce-lockfile")
             phase = run("pub-%02d" % index, command, directory)
             report["phases"].append({"package": package, **phase})
@@ -107,7 +111,10 @@ def main():
             destination = OUT / "resolved-locks" / name
             destination.parent.mkdir(parents=True, exist_ok=True)
             destination.write_bytes((ROOT / name).read_bytes())
-    failure = failure or bool(report["input_drift"])
+    report["bootstrap_lock_updates"] = [
+        name for name in report["input_drift"] if bootstrap and name.endswith("/pubspec.lock")]
+    failure = failure or any(
+        name not in report["bootstrap_lock_updates"] for name in report["input_drift"])
     report["exit_code"] = int(failure)
     (OUT / "result.json").write_text(json.dumps(report, indent=2) + "\n")
     print("FEASIBILITY_RESULT " + json.dumps(report), flush=True)
