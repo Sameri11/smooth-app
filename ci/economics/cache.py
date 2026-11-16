@@ -75,7 +75,8 @@ def build_specs(engine):
     return [
         sdk,
         Spec("deps", "deps", "deps.tar.zst", "RUNNER_TEMP",
-             [("cache-state/repository", True), ("cache-state/bazelisk", True), ("bazel", True)]),
+             [("cache-state/repository", True), ("cache-state/bazelisk", True),
+              ("cache-state/pub", True), ("bazel", True)]),
         Spec("disk", "build", "build-disk.tar.zst", "RUNNER_TEMP", [("cache-state/disk", True)]),
         Spec("lock", "build", "build-lock.tar.zst", "ROOT", [("MODULE.bazel.lock", True)]),
     ]

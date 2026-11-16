@@ -169,7 +169,7 @@ class Recorder:
         stdout_path.parent.mkdir(parents=True, exist_ok=True)
         stderr_path.parent.mkdir(parents=True, exist_ok=True)
         record = self._open(name, "command", argv=[str(part) for part in argv],
-                            cwd=cwd.relative_to(ROOT).as_posix())
+                            cwd=cwd.relative_to(ROOT).as_posix() if cwd.is_relative_to(ROOT) else str(cwd))
         with stdout_path.open("w") as out, stderr_path.open("w") as err:
             code = subprocess.run(argv, cwd=cwd, env=env, stdout=out, stderr=err).returncode
         self._close(record, exit_code=code, stdout=stdout_path.relative_to(OUT).as_posix())
@@ -204,6 +204,26 @@ def bazel_argv(rt, command, *options):
             "--nosystem_rc", "--nohome_rc", command,
             "--disk_cache=" + str(cache / "disk"), "--repository_cache=" + str(cache / "repository"),
             "--remote_cache=", "--repo_env=FLUTTER_ROOT=" + str(rt / "flutter"), *options]
+
+
+def ensure_tool_package_config(rt, env, recorder, name="flutter-tools-pub-get"):
+    """Resolve the SDK tool's locked packages; include this setup in measured job cost."""
+    tool = rt / "flutter" / "packages" / "flutter_tools"
+    dart = rt / "flutter" / "bin" / "cache" / "dart-sdk" / "bin" / "dart"
+    if not dart.is_file():
+        raise probe.Stop("SDK dart is missing at %s" % dart)
+    locked = probe.digest(tool / "pubspec.lock")
+    if locked is None:
+        raise probe.Stop("SDK flutter_tools pubspec.lock is missing")
+    with recorder.span("tool_dependency_resolution"):
+        phase = recorder.command(name, [str(dart), "pub", "get", "--enforce-lockfile",
+                                        "--suppress-analytics"], tool, env)
+    if phase["exit_code"]:
+        raise probe.Stop("flutter_tools pub get exited %d" % phase["exit_code"])
+    if probe.digest(tool / "pubspec.lock") != locked:
+        raise probe.Stop("flutter_tools pub get changed its SDK lock")
+    if not (tool / ".dart_tool" / "package_config.json").is_file():
+        raise probe.Stop("flutter_tools pub get wrote no package_config.json")
 
 
 def capture(argv, env, what):
@@ -365,6 +385,7 @@ def bazel_job(rt, env, recorder, manifest, data, scenario, expected, defaults):
     if raw.exists():
         raw.unlink()
     mode = "update" if scenario == "cold" else "error"
+    ensure_tool_package_config(rt, env, recorder)
     probe.check_inputs(manifest, "before bazel test")
     with recorder.span("tests"):
         test = recorder.command("bazel-test", bazel_argv(
@@ -497,6 +518,7 @@ def run_controls(engine, rep):
                 else:
                     if probe.digest(ROOT / "MODULE.bazel.lock") != data["bazel_module_lock_sha256"]:
                         raise probe.Stop("controls require the frozen module lock")
+                    ensure_tool_package_config(rt, env, recorder, "control-tools-pub-get-" + control)
                     phase = recorder.command("control-" + control, bazel_argv(
                         rt, "test", "--lockfile_mode=error",
                         "--test_output=errors", TARGET), ROOT, env)
