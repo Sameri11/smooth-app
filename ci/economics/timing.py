@@ -18,6 +18,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
@@ -226,6 +227,37 @@ def ensure_tool_package_config(rt, env, recorder, name="flutter-tools-pub-get"):
         raise probe.Stop("flutter_tools pub get wrote no package_config.json")
 
 
+def consumer_generated_input_hashes():
+    directory = ROOT / SMOOTH / "lib/l10n"
+    aggregate = directory / "app_localizations.dart"
+    imports = re.findall(r"^import '(app_localizations_[A-Za-z0-9_]+\.dart)';$",
+                         aggregate.read_text(), re.MULTILINE)
+    if not imports:
+        raise probe.Stop("localization aggregator declares no locale imports")
+    missing = [name for name in imports if not (directory / name).is_file()]
+    if missing:
+        raise probe.Stop("generated locale sources missing: %s" % missing)
+    return {name: probe.digest(directory / name) for name in sorted(imports + [aggregate.name])}
+
+
+def ensure_consumer_generated_inputs(rt, env, recorder, name="smooth-app-pub-get"):
+    """Run the app's stock pub get, which writes its gitignored lib/l10n locale sources.
+    A fresh checkout lacks them, and Bazel's lib/**/*.dart glob then fails the app kernel."""
+    flutter = str(rt / "flutter" / "bin" / "flutter")
+    locked = probe.digest(ROOT / SMOOTH / "pubspec.lock")
+    aggregate = ROOT / SMOOTH / "lib/l10n/app_localizations.dart"
+    aggregate_sha = probe.digest(aggregate)
+    with recorder.span("dependency_resolution"):
+        phase = recorder.command(name, [flutter, "pub", "get", "--enforce-lockfile"], ROOT / SMOOTH, env)
+    if phase["exit_code"]:
+        raise probe.Stop("%s pub get exited %d" % (SMOOTH, phase["exit_code"]))
+    if probe.digest(ROOT / SMOOTH / "pubspec.lock") != locked:
+        raise probe.Stop("%s pub get changed its lock" % SMOOTH)
+    if probe.digest(aggregate) != aggregate_sha:
+        raise probe.Stop("consumer generation changed the frozen localization aggregator")
+    probe.write_json(OUT / (name + "-generated-inputs.json"), consumer_generated_input_hashes())
+
+
 def capture(argv, env, what):
     result = subprocess.run(argv, cwd=ROOT, env=env, capture_output=True, text=True)
     if result.returncode:
@@ -386,6 +418,7 @@ def bazel_job(rt, env, recorder, manifest, data, scenario, expected, defaults):
         raw.unlink()
     mode = "update" if scenario == "cold" else "error"
     ensure_tool_package_config(rt, env, recorder)
+    ensure_consumer_generated_inputs(rt, env, recorder)
     probe.check_inputs(manifest, "before bazel test")
     with recorder.span("tests"):
         test = recorder.command("bazel-test", bazel_argv(
@@ -519,6 +552,7 @@ def run_controls(engine, rep):
                     if probe.digest(ROOT / "MODULE.bazel.lock") != data["bazel_module_lock_sha256"]:
                         raise probe.Stop("controls require the frozen module lock")
                     ensure_tool_package_config(rt, env, recorder, "control-tools-pub-get-" + control)
+                    ensure_consumer_generated_inputs(rt, env, recorder, "control-smooth-pub-get-" + control)
                     phase = recorder.command("control-" + control, bazel_argv(
                         rt, "test", "--lockfile_mode=error",
                         "--test_output=errors", TARGET), ROOT, env)
