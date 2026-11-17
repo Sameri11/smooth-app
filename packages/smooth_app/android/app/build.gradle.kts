@@ -52,6 +52,11 @@ android {
     buildTypes {
         debug {
             signingConfig = signingConfigs.getByName("debug")
+            // Select one ABI without the version-code change from split APKs.
+            ndk {
+                abiFilters.clear()
+                abiFilters.add("x86_64")
+            }
         }
         release {
             signingConfig = if (System.getenv("SIGN_STORE_PATH") != null) {
