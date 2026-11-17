@@ -10,9 +10,11 @@
       Each actual test invocation must exit nonzero and report a parsed case failure.
 
 Parsers and input guards come from probe.py, which is unchanged.
-Opt-in REMOTE_CACHE_MODE=seed|read uses the configured service instead of disk-cache
-transport. Seed disables reads; controls and readers never upload. Credentials stay
-in a private runner rc, never recorded command arguments or uploaded logs.
+Opt-in REMOTE_CACHE_MODE=seed|replay|read applies to the bazel engine only; stock jobs ignore it.
+Bazel then uses the configured service instead of the disk cache: cold runs seed (reads off, writes on),
+later scenarios replay (reads and writes on), and controls read (reads on, writes off). Every remote
+invocation scrubs cache keys by salt alone, keyed to the exact run, attempt, head and repetition.
+Credentials stay in a private runner rc, never in recorded arguments or uploaded logs.
 """
 
 import argparse
@@ -50,10 +52,13 @@ TEST_NEW_NAME = "indexesOf tests Multiple occurrences (lowercase query, ignoring
 CORRUPT_NAME = "removeCharacterAt tests Position 0"
 REMOVE_NAME = "removeEmptySpaces tests String with spaces at the beginning"
 LISTED = 50
+REMOTE_MODES = ("seed", "replay", "read")
+REMOTE_SCRUB_CONFIG = "remote-scrubbing.textproto"
 SOURCE_FILES = (TEST_FILE, LIB_FILE, "MODULE.bazel", "MODULE.bazel.lock", ".bazelversion",
                 "ci/economics/inputs.json", "ci/economics/expected-cases.json",
                 "ci/economics/remote-MODULE.bazel.lock",
-                "ci/economics/timing.py", "ci/economics/probe.py")
+                "ci/economics/timing.py", "ci/economics/probe.py",
+                "ci/economics/action.yml", "ci/economics/lifecycle.py")
 
 # Source edits are predeclared: each anchor must match exactly once and the result must
 # hash to the recorded new digest. The mutated file is restored byte-for-byte afterwards.
@@ -233,21 +238,97 @@ def remote_cache_rc(rt):
     return path
 
 
-def bazel_argv(rt, command, *options, remote_mode=None):
+def remote_mode_for(engine):
+    """REMOTE_CACHE_MODE is exported to every job; only the bazel engine reads it, so stock jobs ignore it."""
+    if engine != "bazel" or "REMOTE_CACHE_MODE" not in os.environ:
+        return None
+    mode = os.environ["REMOTE_CACHE_MODE"]
+    if mode not in REMOTE_MODES:
+        raise probe.Stop("REMOTE_CACHE_MODE must be one of %s, not %r" % (", ".join(REMOTE_MODES), mode))
+    return mode
+
+
+def remote_identity(rep):
+    """Exact run, attempt, head and repetition. One repetition's scenarios and controls share this salt."""
+    run_id = os.environ.get("GITHUB_RUN_ID", "")
+    attempt = os.environ.get("GITHUB_RUN_ATTEMPT", "")
+    head = os.environ.get("GITHUB_SHA", "")
+    if not (re.fullmatch(r"[0-9]+", run_id) and re.fullmatch(r"[0-9]+", attempt)
+            and re.fullmatch(r"[0-9a-f]{40}", head)):
+        raise probe.Stop("remote salt needs numeric GITHUB_RUN_ID and GITHUB_RUN_ATTEMPT and a 40-hex GITHUB_SHA")
+    if os.environ.get("REPETITION") != str(rep):
+        raise probe.Stop("REPETITION must equal the --rep value %d" % rep)
+    return {"run_id": run_id, "attempt": attempt, "head": head, "repetition": rep,
+            "salt": "%s/%s/%s/%d" % (run_id, attempt, head, rep)}
+
+
+def scrubbing_text(salt):
+    """One all-matcher rule that changes only the cache-key salt (remote_scrubbing.proto)."""
+    return ('rules {\n'
+            '  matcher {\n'
+            '    kind: ".*"\n'
+            '    label: ".*"\n'
+            '    mnemonic: ".*"\n'
+            '    match_tools: true\n'
+            '  }\n'
+            '  transform {\n'
+            '    salt: "%s"\n'
+            '  }\n'
+            '}\n') % salt
+
+
+def remote_policy(rt, mode, rep):
+    """Client policy for one remote invocation. seed only writes; replay reads and writes; read only reads."""
+    identity = remote_identity(rep)
+    config = rt / REMOTE_SCRUB_CONFIG
+    config.write_text(scrubbing_text(identity["salt"]))
+    return {"mode": mode, "disk_cache": False, "accept_cached": mode != "seed",
+            "upload_local_results": mode != "read", "upload_async": False,
+            "download_outputs": "all", "identity": identity,
+            "scrubbing": {"matcher": {"kind": ".*", "label": ".*", "mnemonic": ".*", "match_tools": True},
+                          "transform": ["salt"], "config_sha256": probe.digest(config)}}
+
+
+def timed_remote(engine, scenario, rep, rt):
+    """Cold seeds the remote cache; each later scenario replays the same repetition's history."""
+    mode = remote_mode_for(engine)
+    if mode is None:
+        return None
+    wanted = "seed" if scenario == "cold" else "replay"
+    if mode != wanted:
+        raise probe.Stop("%s runs require REMOTE_CACHE_MODE=%s, not %s" % (scenario, wanted, mode))
+    return remote_policy(rt, mode, rep)
+
+
+def control_remote(engine, rt, result):
+    """Controls read the cold seed under the same identity and never write."""
+    mode = remote_mode_for(engine)
+    seeded = result.get("remote_cache")
+    if mode is None:
+        if seeded:
+            raise probe.Stop("the seeded cold run used remote cache; controls must set REMOTE_CACHE_MODE too")
+        return None
+    if not seeded or seeded.get("mode") != "seed":
+        raise probe.Stop("controls require a cold run that seeded the remote cache")
+    policy = remote_policy(rt, "read", 1)
+    if seeded.get("identity") != policy["identity"]:
+        raise probe.Stop("controls salt differs from the seeded cold run")
+    return policy
+
+
+def bazel_argv(rt, command, *options, remote=None):
     cache = rt / "cache-state"
-    mode = remote_mode if remote_mode is not None else os.environ.get("REMOTE_CACHE_MODE")
     startup = [str(rt / "bazel"), "--output_base=" + str(rt / "bazel-output"),
                "--nosystem_rc", "--nohome_rc"]
-    if mode is not None:
-        if mode not in ("seed", "read"):
-            raise probe.Stop("REMOTE_CACHE_MODE must be seed or read")
-        startup.append("--bazelrc=" + str(remote_cache_rc(rt)))
-        policy = ["--disk_cache=", "--remote_accept_cached=" + str(mode == "read").lower(),
-                  "--remote_upload_local_results=" + str(mode == "seed").lower(),
-                  "--remote_cache_async=false", "--remote_download_outputs=all", "--announce_rc=false",
-                  "--nobuild_event_json_file_path_conversion"]
-    else:
+    if remote is None:
         policy = ["--disk_cache=" + str(cache / "disk"), "--remote_cache="]
+    else:
+        startup.append("--bazelrc=" + str(remote_cache_rc(rt)))
+        policy = ["--disk_cache=", "--remote_accept_cached=" + str(remote["accept_cached"]).lower(),
+                  "--remote_upload_local_results=" + str(remote["upload_local_results"]).lower(),
+                  "--remote_cache_async=false", "--remote_download_outputs=" + remote["download_outputs"],
+                  "--announce_rc=false", "--nobuild_event_json_file_path_conversion",
+                  "--experimental_remote_scrubbing_config=" + str(rt / REMOTE_SCRUB_CONFIG)]
     return [*startup, command, *policy, "--repository_cache=" + str(cache / "repository"),
             "--repo_env=FLUTTER_ROOT=" + str(rt / "flutter"), *options]
 
@@ -450,7 +531,18 @@ def bep_gate(scenario, events, labels):
             "per_label": per_label, "problems": problems, "verdict": "fail" if problems else "pass"}
 
 
-def bazel_job(rt, env, recorder, manifest, data, scenario, expected, defaults):
+def build_metrics(events):
+    """Action counters from BEP BuildMetrics as reported; not a whole-build cache proof."""
+    for event in events:
+        if "buildMetrics" in event:
+            summary = event["buildMetrics"].get("actionSummary", {})
+            return {"actions_created": int(summary.get("actionsCreated", 0)),
+                    "actions_executed": int(summary.get("actionsExecuted", 0)),
+                    "runner_count": summary.get("runnerCount", [])}
+    return None
+
+
+def bazel_job(rt, env, recorder, manifest, data, scenario, expected, defaults, remote):
     if not (rt / "bazel").is_file():
         raise probe.Stop("Bazelisk is not installed at %s" % (rt / "bazel"))
     frozen = data["bazel_module_lock_sha256"]
@@ -468,7 +560,8 @@ def bazel_job(rt, env, recorder, manifest, data, scenario, expected, defaults):
     with recorder.span("tests"):
         test = recorder.command("bazel-test", bazel_argv(
             rt, "test", "--lockfile_mode=" + mode, "--keep_going", "--test_output=errors",
-            "--build_event_json_file=" + str(raw), *["//%s:tests" % pkg for pkg in PACKAGES]), ROOT, env)
+            "--build_event_json_file=" + str(raw), *["//%s:tests" % pkg for pkg in PACKAGES],
+            remote=remote), ROOT, env)
     probe.check_inputs(manifest, "after bazel test")
     if lock.is_file():
         probe.copy_artifact(lock, OUT / "bazel" / "MODULE.bazel.lock")
@@ -481,20 +574,17 @@ def bazel_job(rt, env, recorder, manifest, data, scenario, expected, defaults):
     (OUT / "bazel" / "bep-filtered.jsonl").write_text(
         "".join(json.dumps(e, sort_keys=True) + "\n" for e in filtered))
     bep = bep_gate(scenario, events, labels)
-    remote_mode = os.environ.get("REMOTE_CACHE_MODE")
-    remote = None
-    if remote_mode:
+    bep["build_metrics"] = build_metrics(events)
+    remote_summary = None
+    if remote:
         remote_hits = sum(entry["cachedRemotely"] for entry in bep["per_label"].values())
-        remote = {"mode": remote_mode, "disk_cache": False,
-                  "accept_cached": remote_mode == "read",
-                  "upload_local_results": remote_mode == "seed",
-                  "test_result_hits": remote_hits, "usage_bytes": None}
-        if remote_mode == "seed" and bep["cache_hits"]:
+        remote_summary = {"mode": remote["mode"], "test_result_hits": remote_hits,
+                          "usage_bytes": None, "backend_bill": None}
+        if remote["mode"] == "seed" and bep["cache_hits"]:
             bep["problems"].append("seed must execute without cache reads")
-            bep["verdict"] = "fail"
-        if remote_mode == "read" and not remote_hits:
-            bep["problems"].append("reader produced no remotely cached test results")
-            bep["verdict"] = "fail"
+        if remote["mode"] == "replay" and scenario == "warm" and not remote_hits:
+            bep["problems"].append("unchanged replay produced no remote test-result hits")
+        bep["verdict"] = "fail" if bep["problems"] else "pass"
     packages = {}
     for pkg in PACKAGES:
         found = probe.collect_bazel(pkg, defaults[pkg])
@@ -515,7 +605,7 @@ def bazel_job(rt, env, recorder, manifest, data, scenario, expected, defaults):
             "before_sha256": None if scenario == "cold" else frozen,
             "after_sha256": probe.digest(lock), "copied": "bazel/MODULE.bazel.lock",
             "verdict": "pass" if lock_ok else "fail"},
-            "remote_cache": remote, "bep": bep, "packages": packages, "verdict": verdict}
+            "remote_cache": remote_summary, "bep": bep, "packages": packages, "verdict": verdict}
 
 
 def run_timed(engine, scenario, rep):
@@ -525,7 +615,7 @@ def run_timed(engine, scenario, rep):
     report = {"mode": "timed", "classification": "host_timing_no_coverage", "engine": engine,
               "scenario": scenario, "rep": rep, "workflow_revision": os.environ.get("GITHUB_SHA"),
               "runner_image": os.environ.get("ImageVersion"), "mutation": None,
-              "required_result": None, "verdict": "fail", "exit_code": 1, "stopped": None}
+              "required_result": None, "remote_cache": None, "verdict": "fail", "exit_code": 1, "stopped": None}
     try:
         env = job_env(engine, rt)
         manifest = probe.load_manifest()
@@ -537,6 +627,8 @@ def run_timed(engine, scenario, rep):
         report["identities"] = identities(engine, manifest, env, rt)
         report["sources_sha256_before"] = source_hashes(manifest)
         expected = scenario_cases(data, scenario)
+        remote = timed_remote(engine, scenario, rep, rt)
+        report["remote_cache"] = remote
         name = MUTATION_FOR_SCENARIO.get(scenario)
         report["mutation_scope"] = "predeclared source edit applied before the timed command"
         with contextlib.ExitStack() as stack:
@@ -545,7 +637,7 @@ def run_timed(engine, scenario, rep):
             if engine == "flutter":
                 gate = flutter_job(rt, env, recorder, manifest, data, expected)
             else:
-                gate = bazel_job(rt, env, recorder, manifest, data, scenario, expected, defaults)
+                gate = bazel_job(rt, env, recorder, manifest, data, scenario, expected, defaults, remote)
         after = source_hashes(manifest)
         sources_restored = all(after[p] == report["sources_sha256_before"][p] for p in (TEST_FILE, LIB_FILE))
         report["sources_restored"] = sources_restored
@@ -594,8 +686,10 @@ def run_controls(engine, rep):
     names = {c["name"] for c in cases[SMOOTH] if c["file"] == TEST_REL}
     recorder = Recorder()
     report = {"mode": "controls", "engine": engine, "rep": 1, "controls": [], "verdict": "fail",
-              "exit_code": 1, "stopped": None}
+              "exit_code": 1, "stopped": None, "remote_cache": None}
     try:
+        remote = control_remote(engine, rt, result)
+        report["remote_cache"] = remote
         for control, spec in CONTROLS.items():
             required = CORRUPT_NAME if control == "corrupted-assertion" else REMOVE_NAME
             with mutated(spec, control) as applied:
@@ -614,8 +708,7 @@ def run_controls(engine, rep):
                     ensure_consumer_generated_inputs(rt, env, recorder, "control-smooth-pub-get-" + control)
                     phase = recorder.command("control-" + control, bazel_argv(
                         rt, "test", "--lockfile_mode=error",
-                        "--test_output=errors", TARGET,
-                        remote_mode="read" if os.environ.get("REMOTE_CACHE_MODE") else None), ROOT, env)
+                        "--test_output=errors", TARGET, remote=remote), ROOT, env)
                     xml = ROOT / "bazel-testlogs" / SMOOTH / TEST_STEM / "test.xml"
                     if xml.is_file():
                         probe.copy_artifact(xml, OUT / "controls" / (control + ".test.xml"))
