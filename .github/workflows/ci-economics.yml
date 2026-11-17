@@ -1,4 +1,4 @@
-name: Host timing pilot
+name: Host remote cache readiness
 
 on:
   push:
@@ -39,6 +39,7 @@ jobs:
       ENGINE: ${{ matrix.engine }}
       SCENARIO: ${{ matrix.scenario }}
       REPETITION: ${{ matrix.rep }}
+      REMOTE_CACHE_MODE: seed
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -59,20 +60,6 @@ jobs:
           ref: 6ab5ab906916abfdbd80d8a843bee87df500766d
           path: .ci-rules
           persist-credentials: false
-      - name: Mark restore start
-        if: matrix.scenario != 'cold'
-        run: python3 ci/economics/clock.py download-start
-      - name: Download exact ancestor
-        if: matrix.scenario != 'cold'
-        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
-        with:
-          name: seed-${{ matrix.engine }}-${{ matrix.rep }}
-          path: ${{ runner.temp }}/seed
-      - name: Verify and restore ancestor
-        if: matrix.scenario != 'cold'
-        run: |
-          python3 ci/economics/clock.py download-end
-          python3 ci/economics/cache.py restore --engine "$ENGINE" --scenario "$SCENARIO" --rep "$REPETITION"
       - name: Install checksum-verified Flutter
         if: matrix.scenario == 'cold'
         shell: bash
@@ -107,28 +94,20 @@ jobs:
           "$FLUTTER_ROOT/bin/flutter" --version
           python3 ci/economics/clock.py tools-ready
       - name: Run and gate matched host workload
+        env:
+          BAZEL_CACHE_HOST: ${{ secrets.BAZEL_CACHE_HOST }}
+          BAZEL_CACHE_PROJECT_ID: ${{ secrets.BAZEL_CACHE_PROJECT_ID }}
+          BAZEL_CACHE_TOKEN_RW: ${{ secrets.BAZEL_CACHE_TOKEN_RW }}
         run: python3 ci/economics/timing.py run --engine "$ENGINE" --scenario "$SCENARIO" --rep "$REPETITION"
-      - name: Pack updated cache state
-        id: pack
-        run: python3 ci/economics/cache.py pack --engine "$ENGINE" --scenario "$SCENARIO" --rep "$REPETITION"
-      - name: Mark cache upload start
-        if: steps.pack.outputs.upload == 'true'
-        run: python3 ci/economics/clock.py upload-start
-      - name: Save immutable cache state
-        if: steps.pack.outputs.upload == 'true'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
-        with:
-          name: ${{ matrix.scenario == 'cold' && format('seed-{0}-{1}', matrix.engine, matrix.rep) || format('updated-{0}-{1}-{2}', matrix.engine, matrix.scenario, matrix.rep) }}
-          path: ${{ steps.pack.outputs.path }}
-          compression-level: 0
-          retention-days: 1
-          if-no-files-found: error
-      - name: Mark cache upload end
-        if: steps.pack.outputs.upload == 'true'
-        run: python3 ci/economics/clock.py upload-end
       - name: Prove rejection of broken tests and library
-        if: matrix.scenario == 'cold' && matrix.rep == 1
+        env:
+          BAZEL_CACHE_HOST: ${{ secrets.BAZEL_CACHE_HOST }}
+          BAZEL_CACHE_PROJECT_ID: ${{ secrets.BAZEL_CACHE_PROJECT_ID }}
+          BAZEL_CACHE_TOKEN_RW: ${{ secrets.BAZEL_CACHE_TOKEN_RW }}
         run: python3 ci/economics/timing.py controls --engine "$ENGINE" --rep "$REPETITION"
+      - name: Remove runner credentials
+        if: always()
+        run: rm -f "$RUNNER_TEMP/remote-cache.bazelrc" "$RUNNER_TEMP/bep-raw.json"
       - name: Check compact evidence size
         id: evidence
         if: always()
@@ -159,6 +138,7 @@ jobs:
       ENGINE: ${{ matrix.engine }}
       SCENARIO: ${{ matrix.scenario }}
       REPETITION: ${{ matrix.rep }}
+      REMOTE_CACHE_MODE: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -179,22 +159,11 @@ jobs:
           ref: 6ab5ab906916abfdbd80d8a843bee87df500766d
           path: .ci-rules
           persist-credentials: false
-      - name: Mark restore start
-        if: matrix.scenario != 'cold'
-        run: python3 ci/economics/clock.py download-start
-      - name: Download exact ancestor
-        if: matrix.scenario != 'cold'
-        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
-        with:
-          name: seed-${{ matrix.engine }}-${{ matrix.rep }}
-          path: ${{ runner.temp }}/seed
-      - name: Verify and restore ancestor
-        if: matrix.scenario != 'cold'
+      - name: Install frozen consumer module lock
         run: |
-          python3 ci/economics/clock.py download-end
-          python3 ci/economics/cache.py restore --engine "$ENGINE" --scenario "$SCENARIO" --rep "$REPETITION"
+          echo "7b4c6e062cc56d7d9890a2e88fd3132421e57e307fd61e513f9724a27c31337f  ci/economics/remote-MODULE.bazel.lock" | sha256sum --check
+          cp ci/economics/remote-MODULE.bazel.lock MODULE.bazel.lock
       - name: Install checksum-verified Flutter
-        if: matrix.scenario == 'cold'
         shell: bash
         run: |
           set -euo pipefail
@@ -207,7 +176,6 @@ jobs:
           rm "$archive"
           python3 ci/economics/clock.py sdk-install-end
       - name: Install checksum-verified Bazelisk
-        if: matrix.engine == 'bazel' && matrix.scenario == 'cold'
         shell: bash
         run: |
           set -euo pipefail
@@ -227,28 +195,14 @@ jobs:
           "$FLUTTER_ROOT/bin/flutter" --version
           python3 ci/economics/clock.py tools-ready
       - name: Run and gate matched host workload
+        env:
+          BAZEL_CACHE_HOST: ${{ secrets.BAZEL_CACHE_HOST }}
+          BAZEL_CACHE_PROJECT_ID: ${{ secrets.BAZEL_CACHE_PROJECT_ID }}
+          BAZEL_CACHE_TOKEN_RW: ${{ secrets.BAZEL_CACHE_TOKEN_RW }}
         run: python3 ci/economics/timing.py run --engine "$ENGINE" --scenario "$SCENARIO" --rep "$REPETITION"
-      - name: Pack updated cache state
-        id: pack
-        run: python3 ci/economics/cache.py pack --engine "$ENGINE" --scenario "$SCENARIO" --rep "$REPETITION"
-      - name: Mark cache upload start
-        if: steps.pack.outputs.upload == 'true'
-        run: python3 ci/economics/clock.py upload-start
-      - name: Save immutable cache state
-        if: steps.pack.outputs.upload == 'true'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
-        with:
-          name: ${{ matrix.scenario == 'cold' && format('seed-{0}-{1}', matrix.engine, matrix.rep) || format('updated-{0}-{1}-{2}', matrix.engine, matrix.scenario, matrix.rep) }}
-          path: ${{ steps.pack.outputs.path }}
-          compression-level: 0
-          retention-days: 1
-          if-no-files-found: error
-      - name: Mark cache upload end
-        if: steps.pack.outputs.upload == 'true'
-        run: python3 ci/economics/clock.py upload-end
-      - name: Prove rejection of broken tests and library
-        if: matrix.scenario == 'cold' && matrix.rep == 1
-        run: python3 ci/economics/timing.py controls --engine "$ENGINE" --rep "$REPETITION"
+      - name: Remove runner credentials
+        if: always()
+        run: rm -f "$RUNNER_TEMP/remote-cache.bazelrc" "$RUNNER_TEMP/bep-raw.json"
       - name: Check compact evidence size
         id: evidence
         if: always()
