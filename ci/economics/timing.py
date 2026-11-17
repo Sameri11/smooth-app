@@ -10,6 +10,9 @@
       Each actual test invocation must exit nonzero and report a parsed case failure.
 
 Parsers and input guards come from probe.py, which is unchanged.
+Opt-in REMOTE_CACHE_MODE=seed|read uses the configured service instead of disk-cache
+transport. Seed disables reads; controls and readers never upload. Credentials stay
+in a private runner rc, never recorded command arguments or uploaded logs.
 """
 
 import argparse
@@ -19,6 +22,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -48,6 +52,7 @@ REMOVE_NAME = "removeEmptySpaces tests String with spaces at the beginning"
 LISTED = 50
 SOURCE_FILES = (TEST_FILE, LIB_FILE, "MODULE.bazel", "MODULE.bazel.lock", ".bazelversion",
                 "ci/economics/inputs.json", "ci/economics/expected-cases.json",
+                "ci/economics/remote-MODULE.bazel.lock",
                 "ci/economics/timing.py", "ci/economics/probe.py")
 
 # Source edits are predeclared: each anchor must match exactly once and the result must
@@ -171,8 +176,19 @@ class Recorder:
         stderr_path.parent.mkdir(parents=True, exist_ok=True)
         record = self._open(name, "command", argv=[str(part) for part in argv],
                             cwd=cwd.relative_to(ROOT).as_posix() if cwd.is_relative_to(ROOT) else str(cwd))
-        with stdout_path.open("w") as out, stderr_path.open("w") as err:
-            code = subprocess.run(argv, cwd=cwd, env=env, stdout=out, stderr=err).returncode
+        try:
+            with stdout_path.open("w") as out, stderr_path.open("w") as err:
+                code = subprocess.run(argv, cwd=cwd, env=env, stdout=out, stderr=err).returncode
+        finally:
+            for path in (stdout_path, stderr_path):
+                if not path.is_file():
+                    continue
+                text = path.read_text()
+                for key in ("BAZEL_CACHE_TOKEN_RW", "BAZEL_CACHE_HOST", "BAZEL_CACHE_PROJECT_ID"):
+                    secret = os.environ.get(key)
+                    if secret:
+                        text = text.replace(secret, "[REDACTED]")
+                path.write_text(text)
         self._close(record, exit_code=code, stdout=stdout_path.relative_to(OUT).as_posix())
         print("PHASE_RESULT " + json.dumps({"phase": name, "exit_code": code}), flush=True)
         if code:
@@ -199,12 +215,41 @@ def job_env(engine, rt):
     return env
 
 
-def bazel_argv(rt, command, *options):
+def remote_cache_rc(rt):
+    required = ("BAZEL_CACHE_HOST", "BAZEL_CACHE_PROJECT_ID", "BAZEL_CACHE_TOKEN_RW")
+    values = [os.environ.get(key, "") for key in required]
+    if any(not value or "\n" in value or "\r" in value for value in values):
+        raise probe.Stop("remote cache requires three nonempty single-line settings")
+    host, project, token = values
+    if "://" in host or "/" in host:
+        raise probe.Stop("remote cache host must have no scheme or path")
+    path = rt / "remote-cache.bazelrc"
+    path.touch(mode=0o600, exist_ok=True)
+    path.chmod(0o600)
+    path.write_text("".join("build " + shlex.quote(flag) + "\n" for flag in (
+        "--remote_cache=grpcs://" + host,
+        "--remote_instance_name=" + project,
+        "--remote_cache_header=Authorization=Bearer " + token)))
+    return path
+
+
+def bazel_argv(rt, command, *options, remote_mode=None):
     cache = rt / "cache-state"
-    return [str(rt / "bazel"), "--output_base=" + str(rt / "bazel-output"),
-            "--nosystem_rc", "--nohome_rc", command,
-            "--disk_cache=" + str(cache / "disk"), "--repository_cache=" + str(cache / "repository"),
-            "--remote_cache=", "--repo_env=FLUTTER_ROOT=" + str(rt / "flutter"), *options]
+    mode = remote_mode if remote_mode is not None else os.environ.get("REMOTE_CACHE_MODE")
+    startup = [str(rt / "bazel"), "--output_base=" + str(rt / "bazel-output"),
+               "--nosystem_rc", "--nohome_rc"]
+    if mode is not None:
+        if mode not in ("seed", "read"):
+            raise probe.Stop("REMOTE_CACHE_MODE must be seed or read")
+        startup.append("--bazelrc=" + str(remote_cache_rc(rt)))
+        policy = ["--disk_cache=", "--remote_accept_cached=" + str(mode == "read").lower(),
+                  "--remote_upload_local_results=" + str(mode == "seed").lower(),
+                  "--remote_cache_async=false", "--remote_download_outputs=all", "--announce_rc=false",
+                  "--nobuild_event_json_file_path_conversion"]
+    else:
+        policy = ["--disk_cache=" + str(cache / "disk"), "--remote_cache="]
+    return [*startup, command, *policy, "--repository_cache=" + str(cache / "repository"),
+            "--repo_env=FLUTTER_ROOT=" + str(rt / "flutter"), *options]
 
 
 def ensure_tool_package_config(rt, env, recorder, name="flutter-tools-pub-get"):
@@ -436,6 +481,20 @@ def bazel_job(rt, env, recorder, manifest, data, scenario, expected, defaults):
     (OUT / "bazel" / "bep-filtered.jsonl").write_text(
         "".join(json.dumps(e, sort_keys=True) + "\n" for e in filtered))
     bep = bep_gate(scenario, events, labels)
+    remote_mode = os.environ.get("REMOTE_CACHE_MODE")
+    remote = None
+    if remote_mode:
+        remote_hits = sum(entry["cachedRemotely"] for entry in bep["per_label"].values())
+        remote = {"mode": remote_mode, "disk_cache": False,
+                  "accept_cached": remote_mode == "read",
+                  "upload_local_results": remote_mode == "seed",
+                  "test_result_hits": remote_hits, "usage_bytes": None}
+        if remote_mode == "seed" and bep["cache_hits"]:
+            bep["problems"].append("seed must execute without cache reads")
+            bep["verdict"] = "fail"
+        if remote_mode == "read" and not remote_hits:
+            bep["problems"].append("reader produced no remotely cached test results")
+            bep["verdict"] = "fail"
     packages = {}
     for pkg in PACKAGES:
         found = probe.collect_bazel(pkg, defaults[pkg])
@@ -456,7 +515,7 @@ def bazel_job(rt, env, recorder, manifest, data, scenario, expected, defaults):
             "before_sha256": None if scenario == "cold" else frozen,
             "after_sha256": probe.digest(lock), "copied": "bazel/MODULE.bazel.lock",
             "verdict": "pass" if lock_ok else "fail"},
-            "bep": bep, "packages": packages, "verdict": verdict}
+            "remote_cache": remote, "bep": bep, "packages": packages, "verdict": verdict}
 
 
 def run_timed(engine, scenario, rep):
@@ -555,7 +614,8 @@ def run_controls(engine, rep):
                     ensure_consumer_generated_inputs(rt, env, recorder, "control-smooth-pub-get-" + control)
                     phase = recorder.command("control-" + control, bazel_argv(
                         rt, "test", "--lockfile_mode=error",
-                        "--test_output=errors", TARGET), ROOT, env)
+                        "--test_output=errors", TARGET,
+                        remote_mode="read" if os.environ.get("REMOTE_CACHE_MODE") else None), ROOT, env)
                     xml = ROOT / "bazel-testlogs" / SMOOTH / TEST_STEM / "test.xml"
                     if xml.is_file():
                         probe.copy_artifact(xml, OUT / "controls" / (control + ".test.xml"))
