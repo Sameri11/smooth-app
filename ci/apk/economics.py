@@ -60,6 +60,9 @@ UPDATE_TARGETS = [f"{APP_BAZEL}:plugin_deps_update", "//packages/smooth_app:dart
 SEEDED = ["plugin_deps.MODULE.bazel", f"{APP_DIR}/lib/dart_plugin_registrant.dart"]
 BAZEL_ALLOWED = frozenset({"MODULE.bazel.lock", *SEEDED})
 STOCK_APK_REL = "build/app/outputs/flutter-apk/app-debug.apk"
+L10N_DIR = f"{APP_DIR}/lib/l10n"
+L10N_AGGREGATE = f"{L10N_DIR}/app_localizations.dart"
+LOCALE_IMPORT_RE = re.compile(r"^import '(app_localizations_[A-Za-z0-9_]+\.dart)';$", re.MULTILINE)
 ARMS = ("stock", "bazel")
 RULES_REVISION = "6ab5ab906916abfdbd80d8a843bee87df500766d"
 EXPECT = {
@@ -80,9 +83,25 @@ SQLITE_PACKAGE = "sqlite3"
 SQLITE_PACKAGE_VERSION = "3.3.3"
 SQLITE_X64_SHA = "52c7183d99b1d85df5d09d9cf11613213f92121756df2562e7319fbe6b2a00b3"
 RIVE_LIB = "lib/x86_64/librive_native.so"
-# Natives whose bytes come from a pinned archive: identical pins require identical bytes.
-PINNED_NATIVES = frozenset({RIVE_LIB})
-# Differing natives reviewed by Main from source and runtime: name -> reason. Empty until then.
+# Packaged bytes of pinned natives must be the verified original or the verified
+# llvm-strip --strip-unneeded output, per name. Nothing else is accepted.
+PINNED_APK_NATIVES = {
+    "lib/x86_64/libsqlite3.so": {
+        SQLITE_X64_SHA: 1802504,
+        "51738906518a591f118b18601135bcbcbfa28fbfdfa6a8aeacbff4d875163da0": 1703640,
+    },
+    RIVE_LIB: {
+        "b4f78fcde381c44537e1351b949db91ce4cf42f1c5b98e613e2ed5a14f84b779": 9354568,
+        "8ad222ac8ea20f9f46a216d66bac37d68b1607cde805439aa87b712a7e6b59e1": 7833048,
+    },
+}
+# Exported dynamic symbols (count, sha256) of each pinned native, observed on the stock APK.
+PINNED_EXPORTS = {
+    "lib/x86_64/libsqlite3.so": (330, "f4a20c277319cd780f4af42a2b467c3cdd6afb955512c39ad7f6c9fe0977cc9c"),
+    RIVE_LIB: (11014, "6628c32ed7113ccd38d7584af0dd3ae3d99c2c0aeafe062211827cba53655b8f"),
+}
+# Differing natives reviewed by Main, keyed by (name, stock sha256, bazel sha256) -> reason.
+# Empty until Main classifies each from source and runtime; a name alone never matches.
 NATIVE_CLASSIFIED: dict = {}
 AGP_METADATA = "META-INF/com/android/build/gradle/app-metadata.properties"
 # Kinds that keep parity pending rather than failing the runtime gate.
@@ -133,6 +152,7 @@ LIMITATIONS = [
     SCOPE,
     "Kernel blob bytes clear only when both arms' VM script source hashes and widget-creation flag match; otherwise they stay pending.",
     "Differing native libraries stay native_pending until Main classifies each from source and runtime; exports, NEEDED and .comment are recorded.",
+    "Native equality after llvm-strip normalisation is content equality after non-runtime symbol removal, not semantic equivalence.",
     "Same member inventory does not excuse a different library when pinned provenance differs.",
     "Runtime proves one scripted offline onboarding path on one emulator (API 34 google_apis x86_64).",
     "visual_review is pending: research parity is not accepted until Main records a real view of the PNGs.",
@@ -323,6 +343,9 @@ def run(label, argv, cwd, timeout, record=True):
     if record:
         entry["stdout_tail"] = tail(out)
         entry["stderr_tail"] = tail(err)
+        if rc != 0:
+            entry["stdout_head"] = out[:16000]
+            entry["stderr_head"] = err[:16000]
     STATE["commands"].append(entry)
     save_state()
     if rc != 0:
@@ -639,6 +662,24 @@ def native_toolchain(name, path, nm):
     return needed, notes, None
 
 
+def normalize_native(name, path, nm_tool):
+    """Normalise a distinct copy with the pinned NDK strip; the packaged bytes stay untouched."""
+    strip = Path(nm_tool).with_name("llvm-strip")
+    copy = path.with_name(path.stem + ".normalized.so")
+    try:
+        shutil.copyfile(path, copy)
+        first = run(f"strip-version-{slug(name)}", [strip, "--version"], TASK, 60, record=False).strip().splitlines()
+        if not first:
+            raise StageError("llvm-strip printed no version")
+        run(f"strip-{slug(name)}", [strip, "--strip-unneeded", copy], TASK, 120, record=False)
+        data = copy.read_bytes()
+    except DeadlineError:
+        raise
+    except (StageError, OSError) as exc:
+        return {"normalized_sha256": None, "normalized_bytes": None, "normalize_command": None, "normalize_tool": None, "normalize_error": f"{type(exc).__name__}: {str(exc)[:300]}"}
+    return {"normalized_sha256": sha256_bytes(data), "normalized_bytes": len(data), "normalize_command": "llvm-strip --strip-unneeded", "normalize_tool": "\n".join(first), "normalize_error": None}
+
+
 def native_record(name, data, path, nm):
     rec = {
         "name": name,
@@ -668,6 +709,7 @@ def native_record(name, data, path, nm):
     if not symbols:
         rec["errors"].append("no exported dynamic symbols parsed")
     rec["needed"], rec["comment"], rec["readelf_error"] = native_toolchain(name, path, nm)
+    rec.update(normalize_native(name, path, nm))
     return rec
 
 
@@ -967,6 +1009,8 @@ def category(name):
         return "manifest"
     if name == "resources.arsc":
         return "arsc"
+    if name.startswith("res/raw/"):
+        return "res_file"
     if name.startswith("res/") and name.endswith(".xml"):
         return "res_xml"
     if name.startswith("res/"):
@@ -1078,10 +1122,15 @@ def contract_failures(rec):
         failures += [f"{native['name']}: {error}" for error in native["errors"]]
         if not native["errors"] and native["elf_machine"] != X86_64_MACHINE:
             failures.append(f"{native['name']}: ELF machine {native['elf_machine']} != x86_64")
-    if SQLITE_X64_SHA not in {native["sha256"] for native in facts["natives"]}:
-        failures.append(f"pinned x86_64 {SQLITE_PACKAGE} {SQLITE_PACKAGE_VERSION} library bytes absent")
-    if RIVE_LIB not in {native["name"] for native in facts["natives"]}:
-        failures.append(f"{RIVE_LIB} absent")
+    natives = {native["name"]: native for native in facts["natives"]}
+    for name, accepted in PINNED_APK_NATIVES.items():
+        native = natives.get(name)
+        if native is None:
+            failures.append(f"pinned native {name} absent")
+        elif accepted.get(native["sha256"]) != native["bytes"]:
+            failures.append(f"pinned native {name} is neither its verified original nor verified stripped form (sha256 {native['sha256']}, {native['bytes']} bytes)")
+        elif (native["dynsym_count"], native["dynsym_sha256"]) != PINNED_EXPORTS[name]:
+            failures.append(f"pinned native {name} exports differ from the verified pin")
     if not facts["dex"] or facts["dex"]["class_count"] == 0:
         failures.append("no DEX classes parsed")
     signing = facts["signing"]
@@ -1110,6 +1159,22 @@ def arm_valid(rec):
 
 
 
+def generated_inventory(root):
+    """Name -> SHA-256 of the locale sources the aggregator imports; fails if any are missing."""
+    directory = root / L10N_DIR
+    aggregate = root / L10N_AGGREGATE
+    if not aggregate.is_file():
+        raise StageError(f"localization aggregator absent at {L10N_AGGREGATE}")
+    imports = LOCALE_IMPORT_RE.findall(aggregate.read_text(encoding="utf-8"))
+    if not imports:
+        raise StageError("localization aggregator declares no locale imports")
+    missing = [name for name in imports if not (directory / name).is_file()]
+    if missing:
+        raise StageError(f"generated locale sources missing: {missing}")
+    names = sorted({*imports, aggregate.name})
+    return {name: sha256_file(directory / name) for name in names}
+
+
 def build_stock(rec, inputs):
     root = make_tree("stock")
     rec["tree"] = str(root)
@@ -1119,6 +1184,7 @@ def build_stock(rec, inputs):
         rec["gradle_pins"] = gradle_pins()
         require_free("stock-prepare")
         run("stock-pub-get", [flutter_bin(), "pub", "get", "--enforce-lockfile"], root / APP_DIR, 900)
+        rec["generated_inputs"] = generated_inventory(root)
     with stage("stock-build"):
         require_free("stock-build")
         run(
@@ -1129,6 +1195,8 @@ def build_stock(rec, inputs):
         )
     with stage("stock-source-check"):
         source_check(rec, root, before, frozenset())
+        if generated_inventory(root) != rec["generated_inputs"]:
+            raise StageError("stock generated locale inputs changed during the build")
     apk = root / APP_DIR / STOCK_APK_REL
     if not apk.is_file():
         raise StageError(f"stock APK absent at {STOCK_APK_REL}")
@@ -1150,6 +1218,14 @@ def build_bazel(rec, inputs):
         version = (root / ".bazelversion").read_text(encoding="utf-8").strip()
         if version != EXPECT["bazel"]:
             raise StageError(f".bazelversion is {version}, pinned {EXPECT['bazel']}")
+    with stage("bazel-consumer-pub-get"):
+        verify_locks(root, inputs)
+        aggregate_before = sha256_file(root / L10N_AGGREGATE)
+        run("bazel-consumer-pub-get", [flutter_bin(), "pub", "get", "--enforce-lockfile"], root / APP_DIR, 900)
+        verify_locks(root, inputs)
+        if sha256_file(root / L10N_AGGREGATE) != aggregate_before:
+            raise StageError("pub get changed the frozen localization aggregator")
+        rec["generated_inputs"] = generated_inventory(root)
     with stage("bazel-update"):
         require_free("bazel-update")
         for target in UPDATE_TARGETS:
@@ -1268,17 +1344,24 @@ def compare(sa, sb):
             find("native", name, f"exported dynamic symbol sets differ ({x['dynsym_count']} vs {y['dynsym_count']})")
         elif x["sha256"] == y["sha256"]:
             continue
-        elif name in PINNED_NATIVES:
-            find("native", name, "pinned-archive member bytes differ between arms; the same pin requires identical bytes")
-        elif name in NATIVE_CLASSIFIED:
-            allow("native", name, NATIVE_CLASSIFIED[name])
+        elif x.get("normalized_sha256") and x["normalized_sha256"] == y.get("normalized_sha256"):
+            allow("native", name, f"raw bytes differ; identical after {x['normalize_command']} ({x['normalize_tool']}); ELF machine and exported symbols also equal")
+        elif not x.get("normalized_sha256") or not y.get("normalized_sha256"):
+            find("native", name, {"stock": x.get("normalize_error"), "bazel": y.get("normalize_error")}, kind="unparsed")
+        elif (name, x["sha256"], y["sha256"]) in NATIVE_CLASSIFIED:
+            allow("native", name, NATIVE_CLASSIFIED[(name, x["sha256"], y["sha256"])])
         else:
             find("native", name, {
                 "exports": x["dynsym_count"],
                 "exports_sha256": x["dynsym_sha256"],
                 "needed": {"stock": x.get("needed"), "bazel": y.get("needed")},
                 "comment": {"stock": x.get("comment"), "bazel": y.get("comment")},
+                "normalized_sha256": {"stock": x.get("normalized_sha256"), "bazel": y.get("normalized_sha256")},
             }, kind="native_pending")
+
+    ga, gb = sa.get("generated_inputs"), sb.get("generated_inputs")
+    if ga != gb:
+        find("generated_inputs", L10N_AGGREGATE, {"stock": ga, "bazel": gb})
 
     ca, cb = ma.get("dex_classes", {}), mb.get("dex_classes", {})
     sa_split, sb_split = ma.get("dex_split", {}), mb.get("dex_split", {})
@@ -1363,7 +1446,7 @@ def cmd_build():
         STATE["failure"] = f"{type(exc).__name__}: {exc}"[:2000]
         save_state()
         log(f"build aborted before arms: {STATE['failure'][:300]}")
-        return 0
+        return 1
 
     build_arm("stock", build_stock, inputs)
     build_arm("bazel", build_bazel, inputs)
@@ -1385,7 +1468,7 @@ def cmd_build():
         rec = STATE["arms"].get(arm, {})
         log(f"{arm}: valid={arm_valid(rec)} contract_failures={len(rec.get('contract_failures', []))}")
     log(f"comparison: {(STATE.get('comparison') or {}).get('status')}; status: {STATE['status']}")
-    return 0
+    return 0 if valid else 1
 
 
 def cmd_runtime():
@@ -1450,6 +1533,8 @@ def apply_losses(state, level):
         for command in body.get("commands") or []:
             command.pop("stdout_tail", None)
             command.pop("stderr_tail", None)
+            command.pop("stdout_head", None)
+            command.pop("stderr_head", None)
     comparison = body.get("comparison")
     if "allowed_items" in dropped and isinstance(comparison, dict):
         comparison["allowed"] = {"omitted": True, "count": len(comparison.get("allowed") or [])}
