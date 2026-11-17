@@ -8,6 +8,13 @@ exports_files(["pubspec.lock"])
 # The generated host-test package includes the pubspec's asset bundle.
 flutter_core(
     name = "app",
+    dart_plugin_registrant = "lib/dart_plugin_registrant.dart",
+    # smooth_app's lib/main.dart deliberately refuses to run on Android. Use
+    # the Google Play entrypoint, matching the app_store/google_play dependency.
+    entrypoint = "lib/entrypoints/android/main_google_play.dart",
+    native_build_env = "@rules_flutter_android//flutter:native_build_env",
+    # app_store_* and scanner_* are build variants upstream selects between;
+    # scanner_shared and app_store_shared arrive transitively.
     path_deps = [
         "//packages/app_store/apple_app_store:srcs",
         "//packages/app_store/google_play:srcs",

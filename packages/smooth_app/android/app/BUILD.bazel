@@ -1,0 +1,68 @@
+# The APK. Placed beside the Gradle module it mirrors so both read the same
+# manifest, resources and sources -- nothing here is a copy.
+
+load("@rules_flutter_android//flutter:defs.bzl", "flutter_android_app", "flutter_plugin_deps_guards")
+load("@rules_kotlin//kotlin:android.bzl", "kt_android_library")
+
+package(default_visibility = ["//visibility:public"])
+
+flutter_plugin_deps_guards(plugins = "@flutter_plugins")
+
+# AGP expands relative class names against the Gradle namespace before stamping
+# applicationId. The APK uses org.openfoodfacts.scanner, while this manifest's
+# namespace is org.openfoodfacts.app, so expand leading-dot names first.
+#
+# So the names are expanded here, before the merger sees them. Only leading-dot
+# names are rewritten; anything already qualified is left alone.
+genrule(
+    name = "expanded_manifest",
+    srcs = ["src/main/AndroidManifest.xml"],
+    outs = ["AndroidManifest.xml"],
+    cmd = "sed 's|android:name=\"\\.|android:name=\"org.openfoodfacts.app.|g' $< > $@",
+)
+
+# Android packaging joins the core artifact with this module's targets. Keep
+# the explicit AndroidX runtime dependencies in their established order.
+flutter_android_app(
+    name = "smooth_app",
+    core = "//packages/smooth_app:app",
+    manifest = ":expanded_manifest",
+    manifest_values = {
+        "applicationId": "org.openfoodfacts.scanner",
+        # Stock Flutter 3.41.8 apps use minSdk 24; the rules default is the
+        # plugin API floor, 21.
+        "minSdkVersion": "24",
+    },
+    plugins = "@flutter_plugins",
+    deps = [
+        ":app_kotlin",
+        "@flutter_plugins//maven:androidx_lifecycle_lifecycle_runtime_android",
+        "@flutter_plugins//maven:androidx_lifecycle_lifecycle_viewmodel_android",
+        "@flutter_plugins//maven:androidx_navigationevent_navigationevent_android",
+    ],
+)
+
+# MainActivity, the quick-settings tile service, and the app's in-tree plugin.
+kt_android_library(
+    name = "app_kotlin",
+    srcs = glob(["src/main/kotlin/**/*.kt"]),
+    # These compile dependencies are also exported by the generated inputs;
+    # keep their original order because it affects APK ZIP alignment.
+    deps = [
+        # do not sort
+        ":smooth_app_inputs",
+        "@flutter_plugins//maven:androidx_lifecycle_lifecycle_common",
+        "@flutter_plugins//maven:androidx_lifecycle_lifecycle_common_java8",
+        "@flutter_plugins//maven:androidx_lifecycle_lifecycle_process",
+        "@flutter_plugins//maven:androidx_lifecycle_lifecycle_runtime",
+        "@flutter_plugins//maven:androidx_fragment_fragment",
+        "@flutter_plugins//maven:androidx_annotation_annotation",
+        "@flutter_plugins//maven:androidx_tracing_tracing",
+        "@flutter_plugins//maven:androidx_core_core",
+        "@flutter_plugins//maven:androidx_window_window_java",
+        "@flutter_plugins//maven:androidx_window_window",
+        "@flutter_plugins//maven:androidx_exifinterface_exifinterface",
+        "@flutter_plugins//maven:com_getkeepsafe_relinker_relinker",
+        "@flutter_plugins//maven:androidx_annotation_annotation_jvm",
+    ],
+)
