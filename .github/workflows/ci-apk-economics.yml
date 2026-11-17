@@ -119,14 +119,49 @@ jobs:
           echo "APK_STEP_DEADLINE_EPOCH=$(( now + minutes*60 - 90 ))" >> "$GITHUB_ENV"
       - name: Exercise both apps on one offline emulator
         timeout-minutes: ${{ fromJSON(steps.runtime-budget.outputs.minutes) }}
-        uses: ReactiveCircus/android-emulator-runner@c9c93e6ba9c4194322e114c40970d5983d9a07cc
-        with:
-          api-level: 34
-          target: google_apis
-          arch: x86_64
-          disable-animations: true
-          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim
-          script: python3 ci/apk/economics.py runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Use Android's tools without relaxing the fork's action allowlist.
+          left() {
+            local seconds
+            seconds=$(( APK_STEP_DEADLINE_EPOCH - $(date +%s) ))
+            (( seconds > 0 )) || return 1
+            printf '%s\n' "$seconds"
+          }
+          export ANDROID_AVD_HOME="$RUNNER_TEMP/apk-avd"
+          export ANDROID_SERIAL=emulator-5554
+          mkdir -p "$ANDROID_AVD_HOME"
+          tools="$ANDROID_HOME/cmdline-tools/latest/bin"
+          image='system-images;android-34;google_apis;x86_64'
+          timeout "$(left)s" "$tools/sdkmanager" emulator "$image"
+          printf 'no\n' | timeout "$(left)s" "$tools/avdmanager" create avd \
+            --force --name ci-apk --package "$image" --device pixel_2
+          "$ANDROID_HOME/emulator/emulator" -avd ci-apk -port 5554 \
+            -no-window -gpu swiftshader_indirect -no-snapshot -noaudio \
+            -no-boot-anim > "$RUNNER_TEMP/apk-emulator.log" 2>&1 &
+          emulator_pid=$!
+          finish() {
+            local rc=$?
+            trap - EXIT
+            timeout 10s adb emu kill || true
+            kill -KILL "$emulator_pid" 2>/dev/null || true
+            wait "$emulator_pid" 2>/dev/null || true
+            python3 -c 'import pathlib,sys; print(pathlib.Path(sys.argv[1]).read_text(errors="replace")[-16000:])' \
+              "$RUNNER_TEMP/apk-emulator.log"
+            exit "$rc"
+          }
+          trap finish EXIT
+          timeout "$(left)s" adb wait-for-device
+          until [[ "$(timeout 10s adb shell getprop sys.boot_completed 2>/dev/null || true)" == 1* ]]; do
+            kill -0 "$emulator_pid"
+            left > /dev/null
+            sleep 2
+          done
+          for scale in window_animation_scale transition_animation_scale animator_duration_scale; do
+            timeout "$(left)s" adb shell settings put global "$scale" 0
+          done
+          python3 ci/apk/economics.py runtime
       - name: Emit compact evidence without artifact storage
         if: always()
         shell: bash
