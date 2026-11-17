@@ -135,7 +135,16 @@ runs:
         BAZEL_CACHE_HOST: ${{ inputs.cache-host }}
         BAZEL_CACHE_PROJECT_ID: ${{ inputs.cache-project }}
         BAZEL_CACHE_TOKEN_RW: ${{ inputs.cache-token }}
-      run: python3 ci/economics/timing.py run --engine "$ENGINE" --scenario "$SCENARIO" --rep "$REPETITION"
+      run: |
+        set -euo pipefail
+        if [[ "${SAME_RUNNER_OUTPUTS+x}" != x ]]; then
+          python3 ci/economics/timing.py run --engine "$ENGINE" --scenario "$SCENARIO" --rep "$REPETITION"
+        elif [[ "$SAME_RUNNER_OUTPUTS" == 1 ]]; then
+          python3 ci/economics/same_runner.py
+        else
+          echo "Invalid same-runner workload selection" >&2
+          exit 1
+        fi
     - name: Reduce private profile to safe aggregates
       if: env.BAZEL_PROFILE == '1'
       shell: bash

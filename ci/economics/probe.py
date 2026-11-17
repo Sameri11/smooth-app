@@ -27,6 +27,12 @@ import xml.etree.ElementTree as ET
 
 ROOT = Path(__file__).resolve().parents[2]
 OUT = Path(os.environ.get("RUNNER_TEMP", "/tmp")) / "smooth-ci-evidence"
+SAME_RUNNER_SAMPLES = ("01-all-1", "02-toplevel-1", "03-toplevel-2", "04-all-2")
+if "SAME_RUNNER_SAMPLE" in os.environ:
+    sample = os.environ["SAME_RUNNER_SAMPLE"]
+    if sample not in SAME_RUNNER_SAMPLES:
+        raise RuntimeError("invalid same-runner sample identity")
+    OUT = OUT / "invocations" / sample
 LOGS = OUT / "logs"
 STOCK = OUT / "stock"
 BAZEL = OUT / "bazel"
