@@ -1,4 +1,4 @@
-name: Host remote cache readiness
+name: Matched host CI replay
 
 on:
   push:
@@ -14,6 +14,7 @@ on:
 
 permissions:
   contents: read
+  actions: write
 
 concurrency:
   group: host-timing-${{ github.ref }}
@@ -24,8 +25,8 @@ env:
   FLUTTER_SUPPRESS_ANALYTICS: 'true'
 
 jobs:
-  cold:
-    name: ${{ matrix.engine }} / ${{ matrix.scenario }} / ${{ matrix.rep }}
+  cold_1:
+    name: ${{ matrix.engine }} / cold / 1
     if: github.repository == 'Sameri11/smooth-app'
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -33,186 +34,205 @@ jobs:
       fail-fast: false
       max-parallel: 2
       matrix:
-        include:
-          - {engine: bazel, scenario: cold, rep: 1}
+        engine: [flutter, bazel]
     env:
       ENGINE: ${{ matrix.engine }}
-      SCENARIO: ${{ matrix.scenario }}
-      REPETITION: ${{ matrix.rep }}
-      REMOTE_CACHE_MODE: seed
-    steps:
+      SCENARIO: cold
+      REPETITION: '1'
+    steps: &workload
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
-      - name: Record runner and setup boundary
-        run: |
-          {
-            echo "FLUTTER_ROOT=$RUNNER_TEMP/flutter"
-            echo "PUB_CACHE=$RUNNER_TEMP/cache-state/pub"
-            echo "BAZELISK_HOME=$RUNNER_TEMP/cache-state/bazelisk"
-          } >> "$GITHUB_ENV"
-          python3 ci/economics/clock.py begin
-      - name: Check out pinned rules
-        if: matrix.engine == 'bazel'
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: ./ci/economics
         with:
-          repository: Sameri11/rules_flutter
-          ref: 6ab5ab906916abfdbd80d8a843bee87df500766d
-          path: .ci-rules
-          persist-credentials: false
-      - name: Install checksum-verified Flutter
-        if: matrix.scenario == 'cold'
-        shell: bash
-        run: |
-          set -euo pipefail
-          python3 ci/economics/clock.py sdk-install-start
-          archive="$RUNNER_TEMP/flutter.tar.xz"
-          curl --fail --location --output "$archive" \
-            "https://storage.googleapis.com/flutter_infra_release/releases/stable/linux/flutter_linux_3.41.8-stable.tar.xz"
-          echo "0c7e47fc39ef86290b41707d687bdca7f82b277267a6ef74717f8e88ac423de1  $archive" | sha256sum --check
-          tar -xJf "$archive" -C "$RUNNER_TEMP"
-          rm "$archive"
-          python3 ci/economics/clock.py sdk-install-end
-      - name: Install checksum-verified Bazelisk
-        if: matrix.engine == 'bazel' && matrix.scenario == 'cold'
-        shell: bash
-        run: |
-          set -euo pipefail
-          python3 ci/economics/clock.py bazelisk-install-start
-          curl --fail --location --output "$RUNNER_TEMP/bazel" \
-            https://github.com/bazelbuild/bazelisk/releases/download/v1.29.0/bazelisk-linux-amd64
-          echo "5a408715e932c0250d28bd84555f12edbf70117de42f9181691c736eacc4a992  $RUNNER_TEMP/bazel" | sha256sum --check
-          chmod +x "$RUNNER_TEMP/bazel"
-          python3 ci/economics/clock.py bazelisk-install-end
-      - name: Verify installed SDK and expose tools
-        shell: bash
-        run: |
-          set -euo pipefail
-          echo "$RUNNER_TEMP/flutter/bin" >> "$GITHUB_PATH"
-          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
-          test "$(git -C "$FLUTTER_ROOT" rev-parse HEAD)" = 02085feb3f5d8a8156e5e28512b9d99351d510c0
-          "$FLUTTER_ROOT/bin/flutter" --version
-          python3 ci/economics/clock.py tools-ready
-      - name: Run and gate matched host workload
-        env:
-          BAZEL_CACHE_HOST: ${{ secrets.BAZEL_CACHE_HOST }}
-          BAZEL_CACHE_PROJECT_ID: ${{ secrets.BAZEL_CACHE_PROJECT_ID }}
-          BAZEL_CACHE_TOKEN_RW: ${{ secrets.BAZEL_CACHE_TOKEN_RW }}
-        run: python3 ci/economics/timing.py run --engine "$ENGINE" --scenario "$SCENARIO" --rep "$REPETITION"
-      - name: Prove rejection of broken tests and library
-        env:
-          BAZEL_CACHE_HOST: ${{ secrets.BAZEL_CACHE_HOST }}
-          BAZEL_CACHE_PROJECT_ID: ${{ secrets.BAZEL_CACHE_PROJECT_ID }}
-          BAZEL_CACHE_TOKEN_RW: ${{ secrets.BAZEL_CACHE_TOKEN_RW }}
-        run: python3 ci/economics/timing.py controls --engine "$ENGINE" --rep "$REPETITION"
-      - name: Remove runner credentials
-        if: always()
-        run: rm -f "$RUNNER_TEMP/remote-cache.bazelrc" "$RUNNER_TEMP/bep-raw.json"
-      - name: Check compact evidence size
-        id: evidence
-        if: always()
-        run: python3 ci/economics/clock.py finish
-      - name: Retain compact evidence
-        if: always() && steps.evidence.outcome == 'success'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
-        with:
-          name: evidence-${{ matrix.engine }}-${{ matrix.scenario }}-${{ matrix.rep }}
-          path: ${{ runner.temp }}/smooth-ci-evidence
-          retention-days: 1
-          if-no-files-found: error
-          include-hidden-files: true
+          cache-host: ${{ secrets.BAZEL_CACHE_HOST }}
+          cache-project: ${{ secrets.BAZEL_CACHE_PROJECT_ID }}
+          cache-token: ${{ secrets.BAZEL_CACHE_TOKEN_RW }}
 
-  warm:
-    name: ${{ matrix.engine }} / ${{ matrix.scenario }} / ${{ matrix.rep }}
+  warm_1:
+    name: ${{ matrix.engine }} / warm / 1
     if: github.repository == 'Sameri11/smooth-app'
-    needs: cold
+    needs: cold_1
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     strategy:
       fail-fast: false
       max-parallel: 2
       matrix:
-        include:
-          - {engine: bazel, scenario: warm, rep: 1}
+        engine: [flutter, bazel]
     env:
       ENGINE: ${{ matrix.engine }}
-      SCENARIO: ${{ matrix.scenario }}
-      REPETITION: ${{ matrix.rep }}
-      REMOTE_CACHE_MODE: read
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-        with:
-          persist-credentials: false
-      - name: Record runner and setup boundary
-        run: |
-          {
-            echo "FLUTTER_ROOT=$RUNNER_TEMP/flutter"
-            echo "PUB_CACHE=$RUNNER_TEMP/cache-state/pub"
-            echo "BAZELISK_HOME=$RUNNER_TEMP/cache-state/bazelisk"
-          } >> "$GITHUB_ENV"
-          python3 ci/economics/clock.py begin
-      - name: Check out pinned rules
-        if: matrix.engine == 'bazel'
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-        with:
-          repository: Sameri11/rules_flutter
-          ref: 6ab5ab906916abfdbd80d8a843bee87df500766d
-          path: .ci-rules
-          persist-credentials: false
-      - name: Install frozen consumer module lock
-        run: |
-          echo "7b4c6e062cc56d7d9890a2e88fd3132421e57e307fd61e513f9724a27c31337f  ci/economics/remote-MODULE.bazel.lock" | sha256sum --check
-          cp ci/economics/remote-MODULE.bazel.lock MODULE.bazel.lock
-      - name: Install checksum-verified Flutter
-        shell: bash
-        run: |
-          set -euo pipefail
-          python3 ci/economics/clock.py sdk-install-start
-          archive="$RUNNER_TEMP/flutter.tar.xz"
-          curl --fail --location --output "$archive" \
-            "https://storage.googleapis.com/flutter_infra_release/releases/stable/linux/flutter_linux_3.41.8-stable.tar.xz"
-          echo "0c7e47fc39ef86290b41707d687bdca7f82b277267a6ef74717f8e88ac423de1  $archive" | sha256sum --check
-          tar -xJf "$archive" -C "$RUNNER_TEMP"
-          rm "$archive"
-          python3 ci/economics/clock.py sdk-install-end
-      - name: Install checksum-verified Bazelisk
-        shell: bash
-        run: |
-          set -euo pipefail
-          python3 ci/economics/clock.py bazelisk-install-start
-          curl --fail --location --output "$RUNNER_TEMP/bazel" \
-            https://github.com/bazelbuild/bazelisk/releases/download/v1.29.0/bazelisk-linux-amd64
-          echo "5a408715e932c0250d28bd84555f12edbf70117de42f9181691c736eacc4a992  $RUNNER_TEMP/bazel" | sha256sum --check
-          chmod +x "$RUNNER_TEMP/bazel"
-          python3 ci/economics/clock.py bazelisk-install-end
-      - name: Verify installed SDK and expose tools
-        shell: bash
-        run: |
-          set -euo pipefail
-          echo "$RUNNER_TEMP/flutter/bin" >> "$GITHUB_PATH"
-          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
-          test "$(git -C "$FLUTTER_ROOT" rev-parse HEAD)" = 02085feb3f5d8a8156e5e28512b9d99351d510c0
-          "$FLUTTER_ROOT/bin/flutter" --version
-          python3 ci/economics/clock.py tools-ready
-      - name: Run and gate matched host workload
-        env:
-          BAZEL_CACHE_HOST: ${{ secrets.BAZEL_CACHE_HOST }}
-          BAZEL_CACHE_PROJECT_ID: ${{ secrets.BAZEL_CACHE_PROJECT_ID }}
-          BAZEL_CACHE_TOKEN_RW: ${{ secrets.BAZEL_CACHE_TOKEN_RW }}
-        run: python3 ci/economics/timing.py run --engine "$ENGINE" --scenario "$SCENARIO" --rep "$REPETITION"
-      - name: Remove runner credentials
-        if: always()
-        run: rm -f "$RUNNER_TEMP/remote-cache.bazelrc" "$RUNNER_TEMP/bep-raw.json"
-      - name: Check compact evidence size
-        id: evidence
-        if: always()
-        run: python3 ci/economics/clock.py finish
-      - name: Retain compact evidence
-        if: always() && steps.evidence.outcome == 'success'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
-        with:
-          name: evidence-${{ matrix.engine }}-${{ matrix.scenario }}-${{ matrix.rep }}
-          path: ${{ runner.temp }}/smooth-ci-evidence
-          retention-days: 1
-          if-no-files-found: error
-          include-hidden-files: true
+      SCENARIO: warm
+      REPETITION: '1'
+    steps: *workload
+
+  test_1:
+    name: ${{ matrix.engine }} / test / 1
+    if: github.repository == 'Sameri11/smooth-app'
+    needs: warm_1
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        engine: [flutter, bazel]
+    env:
+      ENGINE: ${{ matrix.engine }}
+      SCENARIO: test
+      REPETITION: '1'
+    steps: *workload
+
+  lib_1:
+    name: ${{ matrix.engine }} / lib / 1
+    if: github.repository == 'Sameri11/smooth-app'
+    needs: test_1
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        engine: [flutter, bazel]
+    env:
+      ENGINE: ${{ matrix.engine }}
+      SCENARIO: lib
+      REPETITION: '1'
+    steps: *workload
+
+  cold_2:
+    name: ${{ matrix.engine }} / cold / 2
+    if: github.repository == 'Sameri11/smooth-app'
+    needs: lib_1
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        engine: [flutter, bazel]
+    env:
+      ENGINE: ${{ matrix.engine }}
+      SCENARIO: cold
+      REPETITION: '2'
+    steps: *workload
+
+  warm_2:
+    name: ${{ matrix.engine }} / warm / 2
+    if: github.repository == 'Sameri11/smooth-app'
+    needs: cold_2
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        engine: [flutter, bazel]
+    env:
+      ENGINE: ${{ matrix.engine }}
+      SCENARIO: warm
+      REPETITION: '2'
+    steps: *workload
+
+  test_2:
+    name: ${{ matrix.engine }} / test / 2
+    if: github.repository == 'Sameri11/smooth-app'
+    needs: warm_2
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        engine: [flutter, bazel]
+    env:
+      ENGINE: ${{ matrix.engine }}
+      SCENARIO: test
+      REPETITION: '2'
+    steps: *workload
+
+  lib_2:
+    name: ${{ matrix.engine }} / lib / 2
+    if: github.repository == 'Sameri11/smooth-app'
+    needs: test_2
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        engine: [flutter, bazel]
+    env:
+      ENGINE: ${{ matrix.engine }}
+      SCENARIO: lib
+      REPETITION: '2'
+    steps: *workload
+
+  cold_3:
+    name: ${{ matrix.engine }} / cold / 3
+    if: github.repository == 'Sameri11/smooth-app'
+    needs: lib_2
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        engine: [flutter, bazel]
+    env:
+      ENGINE: ${{ matrix.engine }}
+      SCENARIO: cold
+      REPETITION: '3'
+    steps: *workload
+
+  warm_3:
+    name: ${{ matrix.engine }} / warm / 3
+    if: github.repository == 'Sameri11/smooth-app'
+    needs: cold_3
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        engine: [flutter, bazel]
+    env:
+      ENGINE: ${{ matrix.engine }}
+      SCENARIO: warm
+      REPETITION: '3'
+    steps: *workload
+
+  test_3:
+    name: ${{ matrix.engine }} / test / 3
+    if: github.repository == 'Sameri11/smooth-app'
+    needs: warm_3
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        engine: [flutter, bazel]
+    env:
+      ENGINE: ${{ matrix.engine }}
+      SCENARIO: test
+      REPETITION: '3'
+    steps: *workload
+
+  lib_3:
+    name: ${{ matrix.engine }} / lib / 3
+    if: github.repository == 'Sameri11/smooth-app'
+    needs: test_3
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        engine: [flutter, bazel]
+    env:
+      ENGINE: ${{ matrix.engine }}
+      SCENARIO: lib
+      REPETITION: '3'
+    steps: *workload
+
