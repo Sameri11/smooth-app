@@ -136,6 +136,15 @@ runs:
         BAZEL_CACHE_PROJECT_ID: ${{ inputs.cache-project }}
         BAZEL_CACHE_TOKEN_RW: ${{ inputs.cache-token }}
       run: python3 ci/economics/timing.py run --engine "$ENGINE" --scenario "$SCENARIO" --rep "$REPETITION"
+    - name: Reduce private profile to safe aggregates
+      if: env.BAZEL_PROFILE == '1'
+      shell: bash
+      run: |
+        python3 ci/economics/clock.py profile-reduction-start
+        python3 ci/economics/profile.py \
+          --input "$RUNNER_TEMP/bazel-profile.json" \
+          --output "$RUNNER_TEMP/smooth-ci-evidence/profile-summary.json"
+        python3 ci/economics/clock.py profile-reduction-end
     - name: Pack published cache state
       id: pack
       shell: bash
@@ -171,10 +180,10 @@ runs:
         python3 ci/economics/clock.py controls-start
         python3 ci/economics/timing.py controls --engine "$ENGINE" --rep "$REPETITION"
         python3 ci/economics/clock.py controls-end
-    - name: Remove runner credentials
+    - name: Remove private profiling and credential files
       if: always()
       shell: bash
-      run: rm -f "$RUNNER_TEMP/remote-cache.bazelrc" "$RUNNER_TEMP/bep-raw.json"
+      run: rm -f "$RUNNER_TEMP/remote-cache.bazelrc" "$RUNNER_TEMP/bep-raw.json" "$RUNNER_TEMP/bazel-profile.json"
     - name: Check compact evidence size
       id: evidence
       if: always()

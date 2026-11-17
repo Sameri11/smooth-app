@@ -1,8 +1,8 @@
-name: Matched host CI replay
+name: Host cache profile
 
 on:
   push:
-    branches: [prototype/ci-economics]
+    branches: [prototype/host-test-overhead]
     paths:
       - '.github/workflows/ci-economics.yml'
       - 'ci/economics/**'
@@ -17,29 +17,24 @@ permissions:
   actions: write
 
 concurrency:
-  group: host-timing-${{ github.ref }}
+  group: host-profile-${{ github.ref }}
   cancel-in-progress: false
 
 env:
   CI: 'true'
   FLUTTER_SUPPRESS_ANALYTICS: 'true'
+  ENGINE: bazel
+  REPETITION: '1'
 
 jobs:
-  cold_1:
-    name: ${{ matrix.engine }} / cold / 1
+  seed:
+    name: bazel / cold / 1
     if: github.repository == 'Sameri11/smooth-app'
     runs-on: ubuntu-24.04
     timeout-minutes: 45
-    strategy:
-      fail-fast: false
-      max-parallel: 2
-      matrix:
-        engine: [flutter, bazel]
     env:
-      ENGINE: ${{ matrix.engine }}
       SCENARIO: cold
-      REPETITION: '1'
-    steps: &workload
+    steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
@@ -49,190 +44,21 @@ jobs:
           cache-project: ${{ secrets.BAZEL_CACHE_PROJECT_ID }}
           cache-token: ${{ secrets.BAZEL_CACHE_TOKEN_RW }}
 
-  warm_1:
-    name: ${{ matrix.engine }} / warm / 1
+  profile:
+    name: bazel / warm / 1
     if: github.repository == 'Sameri11/smooth-app'
-    needs: cold_1
+    needs: seed
     runs-on: ubuntu-24.04
     timeout-minutes: 45
-    strategy:
-      fail-fast: false
-      max-parallel: 2
-      matrix:
-        engine: [flutter, bazel]
     env:
-      ENGINE: ${{ matrix.engine }}
       SCENARIO: warm
-      REPETITION: '1'
-    steps: *workload
-
-  test_1:
-    name: ${{ matrix.engine }} / test / 1
-    if: github.repository == 'Sameri11/smooth-app'
-    needs: warm_1
-    runs-on: ubuntu-24.04
-    timeout-minutes: 45
-    strategy:
-      fail-fast: false
-      max-parallel: 2
-      matrix:
-        engine: [flutter, bazel]
-    env:
-      ENGINE: ${{ matrix.engine }}
-      SCENARIO: test
-      REPETITION: '1'
-    steps: *workload
-
-  lib_1:
-    name: ${{ matrix.engine }} / lib / 1
-    if: github.repository == 'Sameri11/smooth-app'
-    needs: test_1
-    runs-on: ubuntu-24.04
-    timeout-minutes: 45
-    strategy:
-      fail-fast: false
-      max-parallel: 2
-      matrix:
-        engine: [flutter, bazel]
-    env:
-      ENGINE: ${{ matrix.engine }}
-      SCENARIO: lib
-      REPETITION: '1'
-    steps: *workload
-
-  cold_2:
-    name: ${{ matrix.engine }} / cold / 2
-    if: github.repository == 'Sameri11/smooth-app'
-    needs: lib_1
-    runs-on: ubuntu-24.04
-    timeout-minutes: 45
-    strategy:
-      fail-fast: false
-      max-parallel: 2
-      matrix:
-        engine: [flutter, bazel]
-    env:
-      ENGINE: ${{ matrix.engine }}
-      SCENARIO: cold
-      REPETITION: '2'
-    steps: *workload
-
-  warm_2:
-    name: ${{ matrix.engine }} / warm / 2
-    if: github.repository == 'Sameri11/smooth-app'
-    needs: cold_2
-    runs-on: ubuntu-24.04
-    timeout-minutes: 45
-    strategy:
-      fail-fast: false
-      max-parallel: 2
-      matrix:
-        engine: [flutter, bazel]
-    env:
-      ENGINE: ${{ matrix.engine }}
-      SCENARIO: warm
-      REPETITION: '2'
-    steps: *workload
-
-  test_2:
-    name: ${{ matrix.engine }} / test / 2
-    if: github.repository == 'Sameri11/smooth-app'
-    needs: warm_2
-    runs-on: ubuntu-24.04
-    timeout-minutes: 45
-    strategy:
-      fail-fast: false
-      max-parallel: 2
-      matrix:
-        engine: [flutter, bazel]
-    env:
-      ENGINE: ${{ matrix.engine }}
-      SCENARIO: test
-      REPETITION: '2'
-    steps: *workload
-
-  lib_2:
-    name: ${{ matrix.engine }} / lib / 2
-    if: github.repository == 'Sameri11/smooth-app'
-    needs: test_2
-    runs-on: ubuntu-24.04
-    timeout-minutes: 45
-    strategy:
-      fail-fast: false
-      max-parallel: 2
-      matrix:
-        engine: [flutter, bazel]
-    env:
-      ENGINE: ${{ matrix.engine }}
-      SCENARIO: lib
-      REPETITION: '2'
-    steps: *workload
-
-  cold_3:
-    name: ${{ matrix.engine }} / cold / 3
-    if: github.repository == 'Sameri11/smooth-app'
-    needs: lib_2
-    runs-on: ubuntu-24.04
-    timeout-minutes: 45
-    strategy:
-      fail-fast: false
-      max-parallel: 2
-      matrix:
-        engine: [flutter, bazel]
-    env:
-      ENGINE: ${{ matrix.engine }}
-      SCENARIO: cold
-      REPETITION: '3'
-    steps: *workload
-
-  warm_3:
-    name: ${{ matrix.engine }} / warm / 3
-    if: github.repository == 'Sameri11/smooth-app'
-    needs: cold_3
-    runs-on: ubuntu-24.04
-    timeout-minutes: 45
-    strategy:
-      fail-fast: false
-      max-parallel: 2
-      matrix:
-        engine: [flutter, bazel]
-    env:
-      ENGINE: ${{ matrix.engine }}
-      SCENARIO: warm
-      REPETITION: '3'
-    steps: *workload
-
-  test_3:
-    name: ${{ matrix.engine }} / test / 3
-    if: github.repository == 'Sameri11/smooth-app'
-    needs: warm_3
-    runs-on: ubuntu-24.04
-    timeout-minutes: 45
-    strategy:
-      fail-fast: false
-      max-parallel: 2
-      matrix:
-        engine: [flutter, bazel]
-    env:
-      ENGINE: ${{ matrix.engine }}
-      SCENARIO: test
-      REPETITION: '3'
-    steps: *workload
-
-  lib_3:
-    name: ${{ matrix.engine }} / lib / 3
-    if: github.repository == 'Sameri11/smooth-app'
-    needs: test_3
-    runs-on: ubuntu-24.04
-    timeout-minutes: 45
-    strategy:
-      fail-fast: false
-      max-parallel: 2
-      matrix:
-        engine: [flutter, bazel]
-    env:
-      ENGINE: ${{ matrix.engine }}
-      SCENARIO: lib
-      REPETITION: '3'
-    steps: *workload
-
+      BAZEL_PROFILE: '1'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: ./ci/economics
+        with:
+          cache-host: ${{ secrets.BAZEL_CACHE_HOST }}
+          cache-project: ${{ secrets.BAZEL_CACHE_PROJECT_ID }}
+          cache-token: ${{ secrets.BAZEL_CACHE_TOKEN_RW }}

@@ -15,6 +15,8 @@ Bazel then uses the configured service instead of the disk cache: cold runs seed
 later scenarios replay (reads and writes on), and controls read (reads on, writes off). Every remote
 invocation scrubs cache keys by salt alone, keyed to the exact run, attempt, head and repetition.
 Credentials stay in a private runner rc, never in recorded arguments or uploaded logs.
+BAZEL_PROFILE=1 adds --profile to the timed warm bazel test command only and writes raw JSON
+to the runner temp directory; unset runs the unchanged command. Any other value fails closed.
 """
 
 import argparse
@@ -58,7 +60,7 @@ SOURCE_FILES = (TEST_FILE, LIB_FILE, "MODULE.bazel", "MODULE.bazel.lock", ".baze
                 "ci/economics/inputs.json", "ci/economics/expected-cases.json",
                 "ci/economics/remote-MODULE.bazel.lock",
                 "ci/economics/timing.py", "ci/economics/probe.py",
-                "ci/economics/action.yml", "ci/economics/lifecycle.py")
+                "ci/economics/action.yml", "ci/economics/lifecycle.py", "ci/economics/profile.py")
 
 # Source edits are predeclared: each anchor must match exactly once and the result must
 # hash to the recorded new digest. The mutated file is restored byte-for-byte afterwards.
@@ -316,6 +318,29 @@ def control_remote(engine, rt, result):
     return policy
 
 
+PROFILE_ENV = "BAZEL_PROFILE"
+PROFILE_NAME = "bazel-profile.json"
+PROFILE_LABEL = "runner-temp/" + PROFILE_NAME
+
+
+def profile_option(engine, scenario, rt):
+    """BAZEL_PROFILE=1 profiles only the timed warm Bazel test; unset adds nothing."""
+    value = os.environ.get(PROFILE_ENV)
+    if value is None:
+        return None
+    if value != "1":
+        raise probe.Stop("%s must be 1 or unset, got %r" % (PROFILE_ENV, value))
+    if engine != "bazel" or scenario != "warm":
+        raise probe.Stop("%s=1 is valid only for the bazel warm scenario" % PROFILE_ENV)
+    if not rt.is_absolute():
+        raise probe.Stop("runner temp must be an absolute path for the raw profile")
+    path = rt / PROFILE_NAME
+    if path.exists() or path.is_symlink():
+        raise probe.Stop("raw profile already exists; refusing to reuse or report a stale profile")
+    return path
+
+
+
 def bazel_argv(rt, command, *options, remote=None):
     cache = rt / "cache-state"
     startup = [str(rt / "bazel"), "--output_base=" + str(rt / "bazel-output"),
@@ -542,7 +567,7 @@ def build_metrics(events):
     return None
 
 
-def bazel_job(rt, env, recorder, manifest, data, scenario, expected, defaults, remote):
+def bazel_job(rt, env, recorder, manifest, data, scenario, expected, defaults, remote, profile=None):
     if not (rt / "bazel").is_file():
         raise probe.Stop("Bazelisk is not installed at %s" % (rt / "bazel"))
     frozen = data["bazel_module_lock_sha256"]
@@ -560,7 +585,8 @@ def bazel_job(rt, env, recorder, manifest, data, scenario, expected, defaults, r
     with recorder.span("tests"):
         test = recorder.command("bazel-test", bazel_argv(
             rt, "test", "--lockfile_mode=" + mode, "--keep_going", "--test_output=errors",
-            "--build_event_json_file=" + str(raw), *["//%s:tests" % pkg for pkg in PACKAGES],
+            "--build_event_json_file=" + str(raw), *(["--profile=" + str(profile)] if profile else []),
+            *["//%s:tests" % pkg for pkg in PACKAGES],
             remote=remote), ROOT, env)
     probe.check_inputs(manifest, "after bazel test")
     if lock.is_file():
@@ -629,6 +655,9 @@ def run_timed(engine, scenario, rep):
         expected = scenario_cases(data, scenario)
         remote = timed_remote(engine, scenario, rep, rt)
         report["remote_cache"] = remote
+        profile = profile_option(engine, scenario, rt)
+        report["profile"] = {"enabled": profile is not None,
+                             "path": PROFILE_LABEL if profile is not None else None}
         name = MUTATION_FOR_SCENARIO.get(scenario)
         report["mutation_scope"] = "predeclared source edit applied before the timed command"
         with contextlib.ExitStack() as stack:
@@ -637,7 +666,7 @@ def run_timed(engine, scenario, rep):
             if engine == "flutter":
                 gate = flutter_job(rt, env, recorder, manifest, data, expected)
             else:
-                gate = bazel_job(rt, env, recorder, manifest, data, scenario, expected, defaults, remote)
+                gate = bazel_job(rt, env, recorder, manifest, data, scenario, expected, defaults, remote, profile)
         after = source_hashes(manifest)
         sources_restored = all(after[p] == report["sources_sha256_before"][p] for p in (TEST_FILE, LIB_FILE))
         report["sources_restored"] = sources_restored
