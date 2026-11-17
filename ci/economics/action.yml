@@ -193,7 +193,7 @@ runs:
       if: always() && steps.evidence.outcome == 'success'
       uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
       with:
-        name: evidence-${{ env.ENGINE }}-${{ env.SCENARIO }}-${{ env.REPETITION }}
+        name: evidence-${{ env.ENGINE }}-${{ env.SCENARIO }}-${{ env.REPETITION }}${{ env.OUTPUT_READER != '' && format('-{0}', env.OUTPUT_READER) || '' }}
         path: ${{ runner.temp }}/smooth-ci-evidence
         retention-days: 1
         if-no-files-found: error

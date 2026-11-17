@@ -1,8 +1,8 @@
-name: Host cache profile
+name: Host output materialization
 
 on:
   push:
-    branches: [prototype/host-test-overhead]
+    branches: [prototype/output-materialization]
     paths:
       - '.github/workflows/ci-economics.yml'
       - 'ci/economics/**'
@@ -17,7 +17,7 @@ permissions:
   actions: write
 
 concurrency:
-  group: host-profile-${{ github.ref }}
+  group: host-outputs-${{ github.ref }}
   cancel-in-progress: false
 
 env:
@@ -34,7 +34,7 @@ jobs:
     timeout-minutes: 45
     env:
       SCENARIO: cold
-    steps:
+    steps: &workload
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
@@ -44,21 +44,74 @@ jobs:
           cache-project: ${{ secrets.BAZEL_CACHE_PROJECT_ID }}
           cache-token: ${{ secrets.BAZEL_CACHE_TOKEN_RW }}
 
-  profile:
-    name: bazel / warm / 1
+  toplevel_1:
+    name: bazel / warm / toplevel / 1
     if: github.repository == 'Sameri11/smooth-app'
     needs: seed
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
       SCENARIO: warm
-      BAZEL_PROFILE: '1'
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-        with:
-          persist-credentials: false
-      - uses: ./ci/economics
-        with:
-          cache-host: ${{ secrets.BAZEL_CACHE_HOST }}
-          cache-project: ${{ secrets.BAZEL_CACHE_PROJECT_ID }}
-          cache-token: ${{ secrets.BAZEL_CACHE_TOKEN_RW }}
+      REMOTE_DOWNLOAD_OUTPUTS: toplevel
+      OUTPUT_READER: toplevel-1
+    steps: *workload
+
+  all_1:
+    name: bazel / warm / all / 1
+    if: github.repository == 'Sameri11/smooth-app'
+    needs: toplevel_1
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      SCENARIO: warm
+      REMOTE_DOWNLOAD_OUTPUTS: all
+      OUTPUT_READER: all-1
+    steps: *workload
+
+  all_2:
+    name: bazel / warm / all / 2
+    if: github.repository == 'Sameri11/smooth-app'
+    needs: all_1
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      SCENARIO: warm
+      REMOTE_DOWNLOAD_OUTPUTS: all
+      OUTPUT_READER: all-2
+    steps: *workload
+
+  toplevel_2:
+    name: bazel / warm / toplevel / 2
+    if: github.repository == 'Sameri11/smooth-app'
+    needs: all_2
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      SCENARIO: warm
+      REMOTE_DOWNLOAD_OUTPUTS: toplevel
+      OUTPUT_READER: toplevel-2
+    steps: *workload
+
+  toplevel_3:
+    name: bazel / warm / toplevel / 3
+    if: github.repository == 'Sameri11/smooth-app'
+    needs: toplevel_2
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      SCENARIO: warm
+      REMOTE_DOWNLOAD_OUTPUTS: toplevel
+      OUTPUT_READER: toplevel-3
+    steps: *workload
+
+  all_3:
+    name: bazel / warm / all / 3
+    if: github.repository == 'Sameri11/smooth-app'
+    needs: toplevel_3
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      SCENARIO: warm
+      REMOTE_DOWNLOAD_OUTPUTS: all
+      OUTPUT_READER: all-3
+    steps: *workload

@@ -17,6 +17,7 @@ invocation scrubs cache keys by salt alone, keyed to the exact run, attempt, hea
 Credentials stay in a private runner rc, never in recorded arguments or uploaded logs.
 BAZEL_PROFILE=1 adds --profile to the timed warm bazel test command only and writes raw JSON
 to the runner temp directory; unset runs the unchanged command. Any other value fails closed.
+REMOTE_DOWNLOAD_OUTPUTS=all|toplevel with OUTPUT_READER=<mode>-<1..3> (both or neither) selects the download mode of the timed warm replay only; unset keeps all.
 """
 
 import argparse
@@ -56,6 +57,9 @@ REMOVE_NAME = "removeEmptySpaces tests String with spaces at the beginning"
 LISTED = 50
 REMOTE_MODES = ("seed", "replay", "read")
 REMOTE_SCRUB_CONFIG = "remote-scrubbing.textproto"
+REMOTE_READER_ENVS = ("REMOTE_DOWNLOAD_OUTPUTS", "OUTPUT_READER")
+DOWNLOAD_OUTPUTS = ("all", "toplevel")
+READER_IDENTITIES = ("all-1", "all-2", "all-3", "toplevel-1", "toplevel-2", "toplevel-3")
 SOURCE_FILES = (TEST_FILE, LIB_FILE, "MODULE.bazel", "MODULE.bazel.lock", ".bazelversion",
                 "ci/economics/inputs.json", "ci/economics/expected-cases.json",
                 "ci/economics/remote-MODULE.bazel.lock",
@@ -279,31 +283,56 @@ def scrubbing_text(salt):
             '}\n') % salt
 
 
-def remote_policy(rt, mode, rep):
-    """Client policy for one remote invocation. seed only writes; replay reads and writes; read only reads."""
+def remote_policy(rt, mode, rep, reader=None):
+    """Client policy for one remote invocation. seed only writes; replay reads and writes; read only reads.
+    Download mode is all unless a validated reader identity selects toplevel."""
     identity = remote_identity(rep)
     config = rt / REMOTE_SCRUB_CONFIG
     config.write_text(scrubbing_text(identity["salt"]))
     return {"mode": mode, "disk_cache": False, "accept_cached": mode != "seed",
             "upload_local_results": mode != "read", "upload_async": False,
-            "download_outputs": "all", "identity": identity,
+            "download_outputs": "all" if reader is None else reader.rsplit("-", 1)[0],
+            "reader_identity": reader, "identity": identity,
             "scrubbing": {"matcher": {"kind": ".*", "label": ".*", "mnemonic": ".*", "match_tools": True},
                           "transform": ["salt"], "config_sha256": probe.digest(config)}}
+
+
+def reader_option(engine, scenario, mode):
+    """Warm replay reader identity from REMOTE_DOWNLOAD_OUTPUTS and OUTPUT_READER, both or neither.
+    Other engines, scenarios or remote modes, and values outside the fixed lists, fail closed."""
+    names = [key for key in REMOTE_READER_ENVS if key in os.environ]
+    if not names:
+        return None
+    if len(names) != len(REMOTE_READER_ENVS):
+        raise probe.Stop("%s and %s must be set together" % REMOTE_READER_ENVS)
+    download, reader = (os.environ[key] for key in REMOTE_READER_ENVS)
+    if (engine, scenario, mode) != ("bazel", "warm", "replay"):
+        raise probe.Stop("reader envs are valid only for the bazel warm remote replay run")
+    if download not in DOWNLOAD_OUTPUTS:
+        raise probe.Stop("REMOTE_DOWNLOAD_OUTPUTS must be one of %s, not %r" % (", ".join(DOWNLOAD_OUTPUTS), download))
+    if reader not in READER_IDENTITIES:
+        raise probe.Stop("OUTPUT_READER must be one of %s, not %r" % (", ".join(READER_IDENTITIES), reader))
+    if reader.rsplit("-", 1)[0] != download:
+        raise probe.Stop("OUTPUT_READER %r does not match REMOTE_DOWNLOAD_OUTPUTS %r" % (reader, download))
+    return reader
 
 
 def timed_remote(engine, scenario, rep, rt):
     """Cold seeds the remote cache; each later scenario replays the same repetition's history."""
     mode = remote_mode_for(engine)
+    reader = reader_option(engine, scenario, mode)
     if mode is None:
         return None
     wanted = "seed" if scenario == "cold" else "replay"
     if mode != wanted:
         raise probe.Stop("%s runs require REMOTE_CACHE_MODE=%s, not %s" % (scenario, wanted, mode))
-    return remote_policy(rt, mode, rep)
+    return remote_policy(rt, mode, rep, reader)
 
 
 def control_remote(engine, rt, result):
     """Controls read the cold seed under the same identity and never write."""
+    if any(key in os.environ for key in REMOTE_READER_ENVS):
+        raise probe.Stop("controls take no reader envs; they read the cold seed with the baseline all")
     mode = remote_mode_for(engine)
     seeded = result.get("remote_cache")
     if mode is None:
@@ -610,6 +639,22 @@ def bazel_job(rt, env, recorder, manifest, data, scenario, expected, defaults, r
             bep["problems"].append("seed must execute without cache reads")
         if remote["mode"] == "replay" and scenario == "warm" and not remote_hits:
             bep["problems"].append("unchanged replay produced no remote test-result hits")
+        if remote.get("reader_identity") is not None:
+            if remote_hits != len(labels) or any(
+                    entry["cachedLocally"] for entry in bep["per_label"].values()):
+                bep["problems"].append("comparison reader requires every test result remotely cached")
+            runners = (bep["build_metrics"] or {}).get("runner_count")
+            allowed = {"total", "internal", "remote cache hit"}
+            valid = isinstance(runners, list) and bool(runners) and all(
+                isinstance(entry, dict) and entry.get("name") in allowed
+                and type(entry.get("count")) is int and entry["count"] >= 0
+                for entry in runners)
+            counts = {entry["name"]: entry["count"] for entry in runners} if valid else {}
+            if (not valid or len(counts) != len(runners)
+                    or not {"total", "remote cache hit"}.issubset(counts)
+                    or counts["remote cache hit"] <= 0
+                    or counts["total"] != counts["remote cache hit"] + counts.get("internal", 0)):
+                bep["problems"].append("comparison reader requires complete cache-only runner metrics")
         bep["verdict"] = "fail" if bep["problems"] else "pass"
     packages = {}
     for pkg in PACKAGES:
