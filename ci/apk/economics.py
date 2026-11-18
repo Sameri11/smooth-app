@@ -31,6 +31,7 @@ import shutil
 import struct
 import subprocess
 import sys
+import shlex
 import tarfile
 import tempfile
 import time
@@ -1189,6 +1190,177 @@ def generated_inventory(root):
     return {name: sha256_file(directory / name) for name in names}
 
 
+JNI_LIBRARY = "libdartjni.so"
+PLUGIN_ABI_DIR = "x86_64"
+NATIVE_CMAKE_KEYS = (
+    "CMAKE_BUILD_TYPE", "CMAKE_C_FLAGS", "CMAKE_CXX_FLAGS", "CMAKE_SHARED_LINKER_FLAGS",
+    "CMAKE_MAKE_PROGRAM", "CMAKE_TOOLCHAIN_FILE", "ANDROID_NDK", "ANDROID_PLATFORM",
+    "ANDROID_ABI", "CMAKE_LIBRARY_OUTPUT_DIRECTORY", "CMAKE_SYSTEM_VERSION", "CMAKE_HOME_DIRECTORY",
+)
+MAX_REBUILD_OUTPUT = 512 * 1024
+APP_PACKAGE = "smooth_app"
+HUB_PACKAGE_CONFIG = "@pub_smooth_app//:package_config.json"
+HUB_PROJECT_CONFIG = "@pub_smooth_app//:project_package_config.json"
+
+
+def package_config_record(path, label):
+    """languageVersion facts of one package_config.json: the app entry, and the versions the file names."""
+    if not path.is_file():
+        raise StageError(f"{label}: package_config.json absent at {path}")
+    packages = json.loads(path.read_text(encoding="utf-8")).get("packages", [])
+    own = [p.get("languageVersion") for p in packages if p.get("name") == APP_PACKAGE]
+    versions = Counter(str(p.get("languageVersion")) for p in packages)
+    return {
+        "label": label,
+        "sha256": sha256_file(path),
+        "app_entries": len(own),
+        "app_language_version": own[0] if len(own) == 1 else None,
+        "language_version_counts": dict(sorted(versions.items())),
+    }
+
+
+def bazel_single_file(root, label):
+    paths = bazel_files(root, label)
+    if len(paths) != 1:
+        raise StageError(f"{label} resolved to {len(paths)} files, expected one")
+    return paths[0]
+
+
+def cmake_cache_value(build_dir, key):
+    text = (build_dir / "CMakeCache.txt").read_text(encoding="utf-8", errors="replace")
+    match = re.search(rf"^{key}:[A-Z]+=(.*)$", text, re.M)
+    return match.group(1) if match else None
+
+
+def cmake_settings(build_dir):
+    return {key: cmake_cache_value(build_dir, key) for key in NATIVE_CMAKE_KEYS}
+
+
+def jni_build_dirs(root):
+    """Find only the frozen app's JNI builds in a disposable pub cache."""
+    cache = Path(os.environ.get("PUB_CACHE", str(TASK / "home/.pub-cache"))).expanduser()
+    owners = [TASK.resolve()]
+    if os.environ.get("CI") == "true" and os.environ.get("RUNNER_TEMP"):
+        owners.append(Path(os.environ["RUNNER_TEMP"]).resolve())
+    if not any(cache.resolve().is_relative_to(owner) for owner in owners):
+        raise StageError("pub cache not task-owned")
+    lock = (root / APP_DIR / "pubspec.lock").read_text(encoding="utf-8")
+    entry = re.search(r"^  jni:\n((?:    .*\n)+)", lock, re.M)
+    version = re.search(r'^    version: "([^"]+)"$', entry.group(1), re.M) if entry else None
+    if not version:
+        raise StageError("locked JNI version absent")
+    package = cache / "hosted/pub.dev" / ("jni-" + version.group(1))
+    staging = package / "android/.cxx"
+    expected_source = (package / "src").resolve()
+    expected_output = (root / APP_DIR / "build/jni").resolve()
+    found = []
+    for dirpath, dirnames, filenames in os.walk(staging, followlinks=False):
+        directory = Path(dirpath)
+        dirnames[:] = [name for name in dirnames if not (directory / name).is_symlink()]
+        if "CMakeCache.txt" not in filenames or directory.name != PLUGIN_ABI_DIR:
+            continue
+        if any(path.is_symlink() for path in (directory / "CMakeCache.txt", directory, *directory.parents) if path != cache and path.is_relative_to(cache)):
+            raise StageError("symlink in JNI staging path")
+        if cmake_cache_value(directory, "ANDROID_ABI") != PLUGIN_ABI_DIR:
+            continue
+        source = cmake_cache_value(directory, "CMAKE_HOME_DIRECTORY")
+        output = cmake_cache_value(directory, "CMAKE_LIBRARY_OUTPUT_DIRECTORY")
+        if source and output and Path(source).resolve() == expected_source and Path(output).resolve().is_relative_to(expected_output):
+            found.append(directory)
+    return sorted(found)
+
+
+def jni_targets(ninja, build_dir, root):
+    listing = run("jni-targets", [ninja, "-C", build_dir, "-t", "targets", "all"], build_dir, 30)
+    targets = []
+    for line in listing.splitlines():
+        if ": " not in line:
+            continue
+        path, rule = line.rsplit(": ", 1)
+        if rule == "phony":
+            continue
+        resolved = (build_dir / path).resolve()
+        if not any(resolved.is_relative_to(owner.resolve()) for owner in (build_dir, root)):
+            raise StageError("Ninja output escapes task build trees: " + path)
+        if resolved.name == JNI_LIBRARY:
+            targets.append(path)
+    return targets
+
+
+def stock_jni_rebuild(root, apk):
+    """Post-build diagnostic only; preserve and identify the original packaged library."""
+    global END_AT
+    previous_deadline = END_AT
+    END_AT = min(END_AT, time.time() + 300)
+    result = {"status": "blocked", "builds": []}
+    before_apk = sha256_file(apk)
+    try:
+        with zipfile.ZipFile(apk) as archive:
+            result["apk_entry_sha256"] = sha256_bytes(archive.read(f"lib/{PLUGIN_ABI_DIR}/{JNI_LIBRARY}"))
+        directories = jni_build_dirs(root)
+        if len(directories) != 1:
+            raise StageError(f"expected one identified JNI build directory, found {len(directories)}")
+        build_dir = directories[0]
+        ninja_path = cmake_cache_value(build_dir, "CMAKE_MAKE_PROGRAM")
+        if not ninja_path or not Path(ninja_path).is_file():
+            raise StageError("configured Ninja absent")
+        ninja = Path(ninja_path)
+        entry = {
+            "build_dir": str(build_dir),
+            "cmake": cmake_settings(build_dir),
+            "ninja_version": run("jni-ninja-version", [ninja, "--version"], build_dir, 15).strip(),
+        }
+        result["builds"].append(entry)
+        targets = jni_targets(ninja, build_dir, root)
+        if len(targets) != 1:
+            raise StageError(f"expected one non-phony JNI target, found {len(targets)}")
+        target = targets[0]
+        original = (build_dir / target).resolve()
+        if not original.is_relative_to((root / APP_DIR / "build/jni").resolve()) or not original.is_file():
+            raise StageError("JNI target not in the app's native output directory")
+        entry["target"] = target
+        entry["raw_sha256_before"] = sha256_file(original)
+        saved = TASK / "jni-diagnostic" / JNI_LIBRARY
+        saved.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(original, saved)
+        entry["packaged_identity"] = normalize_native("jni-before", saved, ndk_nm())
+        if entry["packaged_identity"]["normalize_error"]:
+            raise StageError(entry["packaged_identity"]["normalize_error"])
+        if entry["packaged_identity"]["normalized_sha256"] != result["apk_entry_sha256"]:
+            raise StageError("raw JNI library does not normalize to the packaged library")
+        # Targeted clean avoids unrelated CMake outputs; all declared outputs were checked above.
+        run("jni-clean", [ninja, "-C", build_dir, "-t", "clean", target], build_dir, 30)
+        rebuilt = run("jni-verbose-rebuild", [ninja, "-C", build_dir, "-v", target], build_dir, 180)
+        entry["executed_stdout"] = rebuilt[:MAX_REBUILD_OUTPUT]
+        entry["executed_stdout_truncated"] = len(rebuilt) > MAX_REBUILD_OUTPUT
+        command_lines = [match.group(1) for line in rebuilt.splitlines() if (match := re.match(r"^\[\d+/\d+\]\s+(.+)", line))]
+        commands = [shlex.split(line) for line in command_lines]
+        entry["compile_observed"] = any("-c" in args for args in commands)
+        entry["link_observed"] = any(
+            "-c" not in args and "-o" in args and
+            (build_dir / args[args.index("-o") + 1]).resolve() == original
+            for args in commands if "-o" in args and args.index("-o") + 1 < len(args)
+        )
+        entry["raw_sha256_after"] = sha256_file(original)
+        entry["parity"] = "reproduced" if entry["raw_sha256_after"] == entry["raw_sha256_before"] else "not reproduced"
+        entry["status"] = "rebuilt"
+        if entry["executed_stdout_truncated"] or not entry["compile_observed"] or not entry["link_observed"]:
+            raise StageError("complete executed compile/link commands not captured")
+        if entry["parity"] != "reproduced":
+            raise StageError("JNI diagnostic rebuild changed raw library bytes")
+        result["status"] = "captured"
+    except Exception as exc:
+        result["status"] = "blocked"
+        result["reason"] = f"{type(exc).__name__}: {exc}"[:1000]
+    finally:
+        END_AT = previous_deadline
+        result["apk_sha256_before"] = before_apk
+        result["apk_sha256_after"] = sha256_file(apk)
+        if result["apk_sha256_after"] != before_apk:
+            result.update(status="blocked", reason="diagnostic changed original APK")
+    return result
+
+
 def build_stock(rec, inputs):
     root = make_tree("stock")
     rec["tree"] = str(root)
@@ -1199,6 +1371,10 @@ def build_stock(rec, inputs):
         require_free("stock-prepare")
         run("stock-pub-get", [flutter_bin(), "pub", "get", "--enforce-lockfile"], root / APP_DIR, 900)
         rec["generated_inputs"] = generated_inventory(root)
+        try:
+            rec["package_config"] = {"stock_pub_get": package_config_record(root / APP_DIR / ".dart_tool" / "package_config.json", "stock pub get")}
+        except Exception as exc:
+            rec["package_config_error"] = f"{type(exc).__name__}: {exc}"[:500]
     with stage("stock-build"):
         require_free("stock-build")
         try:
@@ -1235,6 +1411,8 @@ def build_stock(rec, inputs):
     if not apk.is_file():
         raise StageError(f"stock APK absent at {STOCK_APK_REL}")
     rec["apk"] = {"path": str(apk), "sha256": sha256_file(apk), "bytes": apk.stat().st_size}
+    with stage("stock-jni-rebuild"):
+        rec["jni_rebuild"] = stock_jni_rebuild(root, apk)
     with stage("stock-keystore"):
         rec["keystore"] = stock_keystore()
     with stage("stock-inventory"):
@@ -1307,6 +1485,15 @@ def build_bazel(rec, inputs):
             rec["maven_debug_resolution"] = resolved_maven_debug()
         except Exception as exc:
             rec["maven_debug_resolution_error"] = f"{type(exc).__name__}: {exc}"[:500]
+    with stage("bazel-package-config"):
+        try:
+            rec["package_config"] = {
+                "consumer_pub_get": package_config_record(root / APP_DIR / ".dart_tool" / "package_config.json", "consumer pub get"),
+                "hub_compiler_input": package_config_record(bazel_single_file(root, HUB_PACKAGE_CONFIG), HUB_PACKAGE_CONFIG),
+                "hub_project_input": package_config_record(bazel_single_file(root, HUB_PROJECT_CONFIG), HUB_PROJECT_CONFIG),
+            }
+        except Exception as exc:
+            rec["package_config_error"] = f"{type(exc).__name__}: {exc}"[:500]
     rec["contract_failures"] = contract_failures(rec)
 
 
@@ -1720,8 +1907,15 @@ def cmd_verdict():
         "runtime": state.get("runtime_status") == "pass",
         "network_restored": ((state.get("runtime") or {}).get("network_restored")) is True,
         "evidence_complete": emit.get("complete") is True,
+        "stock_jni_evidence": (arms.get("stock", {}).get("jni_rebuild") or {}).get("status") == "captured",
+        "package_language_evidence": all(
+            not arms.get(arm, {}).get("package_config_error") and
+            bool(arms.get(arm, {}).get("package_config")) and
+            all(record.get("app_entries") == 1 and record.get("app_language_version") for record in arms[arm]["package_config"].values())
+            for arm in ARMS
+        ),
     }
-    failed = [name for name in ("build_complete", "parity", "runtime", "network_restored", "evidence_complete") if not gates[name]]
+    failed = [name for name in ("build_complete", "parity", "runtime", "network_restored", "evidence_complete", "stock_jni_evidence", "package_language_evidence") if not gates[name]]
     failed += [f"arm_contract:{arm}" for arm, ok in gates["arm_contracts"].items() if not ok]
     machine = not failed
     verdict = {
