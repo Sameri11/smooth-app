@@ -110,6 +110,19 @@ PENDING_KINDS = frozenset({"kernel", "native_pending"})
 X86_64_MACHINE = 62
 DEBUG_ALIAS = "androiddebugkey"
 DEBUG_STOREPASS = "android"
+DEX_SELECTED_LIMIT = 64
+DEX_ACTION_MNEMONICS = "AndroidR8|AndroidDexer|DexBuilder|Desugar|DexMerger|DexShardsToMerge|OptimizingDex|ShardedOptimizingDex|BuildLegacyDex|AppendDesugarDexes|MergeDexZips"
+DEX_EVIDENCE_LIMIT = 2 * 1024 * 1024
+DEX_FULL_ACTION_LIMIT = 4
+DEX_MAX_ACTION_RECORD_BYTES = 96 * 1024
+DEX_MAX_DEPSET_NODES = 4096
+DEX_MAX_DEPSET_EDGES = 20000
+DEX_MAX_ACTION_ARTIFACTS = 5000
+DEX_MAX_TOTAL_DEPSET_NODES = 250000
+DEX_MAX_TOTAL_DEPSET_EDGES = 2000000
+DEX_MAX_TOTAL_ACTION_ARTIFACTS = 500000
+DEX_MAX_PARAM_FILE_BYTES = 4 * 1024 * 1024
+DEX_MAX_TOTAL_PARAM_FILE_BYTES = 64 * 1024 * 1024
 
 CHUNK_CHARS = 1900
 MAX_CHUNKS = 12000
@@ -296,7 +309,9 @@ def tool_env():
     env = dict(os.environ)
     env["HOME"] = str(TASK / "home")
     env["ANDROID_USER_HOME"] = str(TASK / "home" / ".android")
+    env["GRADLE_USER_HOME"] = str(TASK / "home" / ".gradle")
     env["TMPDIR"] = str(TASK / "tmp")
+    env["APK_DEX_CAPTURE_FILE"] = str(TASK / "stock-dex-capture.jsonl")
     env.setdefault("LC_ALL", "C.UTF-8")
     return env
 
@@ -562,6 +577,7 @@ def bazel_common():
         "--tool_java_runtime_version=remotejdk_17",
         "--java_language_version=17",
         "--java_runtime_version=remotejdk_17",
+        "--desugar_java8_libs",
     ]
 
 
@@ -863,6 +879,11 @@ def parse_dex(data):
         access = _u32(data, base + 4)
         super_index = _u32(data, base + 8)
         superclass = None if super_index == 0xFFFFFFFF else type_at(super_index)
+        interfaces_off = _u32(data, base + 12)
+        interfaces = []
+        if interfaces_off:
+            count = _u32(data, interfaces_off)
+            interfaces = [type_at(_u16(data, interfaces_off + 4 + 2 * j)) for j in range(count)]
         data_off = _u32(data, base + 24)
         fields, methods = [], []
         if data_off:
@@ -893,7 +914,7 @@ def parse_dex(data):
                     methods.append(f"{method_ids[current]} {flags}")
         if desc in classes:
             raise DexError(f"class {desc} defined twice in one file")
-        classes[desc] = {"access": access, "super": superclass, "fields": sorted(fields), "methods": sorted(methods)}
+        classes[desc] = {"access": access, "super": superclass, "interfaces": interfaces, "fields": sorted(fields), "methods": sorted(methods)}
     return classes
 
 
@@ -921,6 +942,511 @@ def dex_union(blobs, facts, mem):
     }
     mem["dex_classes"] = classes
     mem["dex_split"] = split
+    facts["dex_selected_payload"] = selected_dex_payload(classes)
+
+
+def read_stock_dex_capture(path):
+    """Read AGP task observations without claiming worker-level D8 execution proof."""
+    try:
+        if not path.is_file():
+            return {"status": "blocked", "reason": "Gradle dex task emitted no execution capture"}
+        size = path.stat().st_size
+        if size > 1024 * 1024:
+            return {"status": "blocked", "reason": "Gradle capture exceeds 1 MiB evidence bound", "bytes": size}
+        rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+        if not rows or any(not isinstance(row, dict) or row.get("status") != "executed_task_observation" for row in rows):
+            return {"status": "blocked", "reason": "no successful doFirst observation for an executed dex task", "records": rows}
+        return {
+            "status": "reported_only",
+            "records": rows,
+            "reason": "AGP task observations do not prove D8 worker entry, actual invocation, or worker tool identity.",
+        }
+    except Exception as exc:
+        return {"status": "blocked", "reason": f"Gradle capture read failed: {type(exc).__name__}: {exc}"[:400]}
+
+def bazel_dex_actions(root):
+    expression = f'mnemonic("{DEX_ACTION_MNEMONICS}",deps({APK_TARGET}))'
+    argv = bazel_argv(
+        "aquery", "error", [expression],
+        extra=["--include_commandline", "--include_param_files", "--include_artifacts=true", "--output=jsonproto"],
+    )
+    try:
+        raw = run("bazel-dex-actions", argv, root, 600, record=False)
+    except StageError as exc:
+        return {"status": "blocked", "reason": f"aquery failed: {str(exc)[:400]}"}
+    encoded = raw.encode("utf-8")
+    try:
+        proto = json.loads(raw)
+    except Exception as exc:
+        return {"status": "blocked", "raw_sha256": sha256_bytes(encoded), "raw_bytes": len(encoded),
+                "reason": f"aquery JSON parse failed: {type(exc).__name__}: {exc}"[:400]}
+
+    fragments = {str(item["id"]): item for item in proto.get("pathFragments", []) if "id" in item}
+    artifacts = {str(item["id"]): item for item in proto.get("artifacts", []) if "id" in item}
+    depsets = {str(item["id"]): item for item in proto.get("depSetOfFiles", proto.get("depSets", [])) if "id" in item}
+
+    def fragment_path(identifier, seen=()):
+        key = str(identifier)
+        if key in seen or key not in fragments:
+            raise ValueError(f"missing/cyclic path fragment {key}")
+        item = fragments[key]
+        name = item.get("label")
+        parent = item.get("parentId")
+        return (fragment_path(parent, (*seen, key)) + "/" if parent else "") + str(name or "")
+
+    def artifact_path(identifier):
+        item = artifacts.get(str(identifier))
+        if not item:
+            raise ValueError(f"missing artifact {identifier}")
+        if item.get("path"):
+            return str(item["path"])
+        return fragment_path(item["pathFragmentId"])
+
+    def action_artifacts(roots, total_coverage):
+        visited, visiting, artifact_ids = set(), set(), set()
+        edges = 0
+        for root_id in roots:
+            root = str(root_id)
+            if root in visited:
+                continue
+            stack = [(root, 0, None)]
+            while stack:
+                key, child_index, children = stack[-1]
+                if children is None:
+                    if key in visiting:
+                        raise ValueError(f"cyclic depset {key}")
+                    if key in visited:
+                        stack.pop()
+                        continue
+                    item = depsets.get(key)
+                    if item is None:
+                        raise ValueError(f"missing depset {key}")
+                    visiting.add(key)
+                    children = [str(value) for value in item.get("transitiveDepSetIds", [])]
+                    direct = [str(value) for value in item.get("directArtifactIds", [])]
+                    edges += len(children) + len(direct)
+                    if edges > DEX_MAX_DEPSET_EDGES:
+                        raise ValueError(f"depset edge limit exceeded ({DEX_MAX_DEPSET_EDGES})")
+                    artifact_ids.update(direct)
+                    stack[-1] = (key, 0, children)
+                    if len(visited) + len(visiting) > DEX_MAX_DEPSET_NODES:
+                        raise ValueError(f"depset node limit exceeded ({DEX_MAX_DEPSET_NODES})")
+                    if len(artifact_ids) > DEX_MAX_ACTION_ARTIFACTS:
+                        raise ValueError(f"action artifact limit exceeded ({DEX_MAX_ACTION_ARTIFACTS})")
+                    continue
+                if child_index < len(children):
+                    child = children[child_index]
+                    stack[-1] = (key, child_index + 1, children)
+                    if child in visiting:
+                        raise ValueError(f"cyclic depset {child}")
+                    if child not in visited:
+                        stack.append((child, 0, None))
+                    continue
+                visiting.remove(key)
+                visited.add(key)
+                stack.pop()
+        total_coverage["nodes"] += len(visited)
+        total_coverage["edges"] += edges
+        total_coverage["artifacts"] += len(artifact_ids)
+        if total_coverage["nodes"] > DEX_MAX_TOTAL_DEPSET_NODES:
+            raise ValueError(f"total depset node limit exceeded ({DEX_MAX_TOTAL_DEPSET_NODES})")
+        if total_coverage["edges"] > DEX_MAX_TOTAL_DEPSET_EDGES:
+            raise ValueError(f"total depset edge limit exceeded ({DEX_MAX_TOTAL_DEPSET_EDGES})")
+        if total_coverage["artifacts"] > DEX_MAX_TOTAL_ACTION_ARTIFACTS:
+            raise ValueError(f"total action artifact limit exceeded ({DEX_MAX_TOTAL_ACTION_ARTIFACTS})")
+        return artifact_ids, len(visited), edges
+
+    configs = {str(item.get("id")): {
+        key: item.get(key) for key in ("id", "mnemonic", "platformName", "checksum", "isTool")
+    } for item in proto.get("configuration", [])}
+    try:
+        info = [*bazel_startup(), "info", *bazel_repository_options()]
+        execroot = Path(run("bazel-dex-execroot", [*info, "execution_root"], root, 300, record=False).strip())
+        selected = []
+        config_counts = Counter()
+        config_records = {}
+        args_digests = Counter()
+        raw_args_digests = Counter()
+        action_key_digests = Counter()
+        flag_sets = Counter()
+        mnemonic_counts = Counter()
+        parameter_expansion_counts = Counter()
+        flag_set_values = {}
+        phase_action_counts = Counter()
+        artifact_coverage = Counter()
+        file_identities = {}
+        param_file_identities = {}
+        input_artifact_total = 0
+        graph_coverage = Counter()
+        errors = []
+        file_hash_cache = {}
+        param_file_bytes_total = [0]
+        def record_error(message):
+            if len(errors) < 64:
+                errors.append(str(message)[:400])
+        def expand_paramfiles(action, arguments):
+            specs = action.get("paramFiles", [])
+            if not isinstance(specs, list):
+                raise ValueError("paramFiles is not a list")
+            by_path = {}
+            for item in specs:
+                if not isinstance(item, dict) or not isinstance(item.get("execPath"), str):
+                    raise ValueError("paramFiles contains malformed entry")
+                name = item["execPath"]
+                if not isinstance(item.get("arguments"), list):
+                    raise ValueError(f"param file arguments missing: {name}")
+                path = Path(name)
+                if path.is_absolute() or ".." in path.parts:
+                    raise ValueError(f"unsafe param file path: {name}")
+                if name in by_path and by_path[name] != item["arguments"]:
+                    raise ValueError(f"conflicting param file records: {name}")
+                by_path[name] = [str(value) for value in item["arguments"]]
+                actual = execroot / path
+                if not actual.is_file():
+                    raise ValueError(f"param file unresolved: {name}")
+                size = actual.stat().st_size
+                if size > DEX_MAX_PARAM_FILE_BYTES:
+                    raise ValueError(f"param file size limit exceeded: {name}")
+                if name not in param_file_identities:
+                    param_file_bytes_total[0] += size
+                    if param_file_bytes_total[0] > DEX_MAX_TOTAL_PARAM_FILE_BYTES:
+                        raise ValueError(f"total param file size limit exceeded ({DEX_MAX_TOTAL_PARAM_FILE_BYTES})")
+                    key = str(actual)
+                    if key not in file_hash_cache:
+                        file_hash_cache[key] = (sha256_file(actual), size)
+                sha, _ = file_hash_cache[str(actual)]
+                identity = {
+                    "path": name, "sha256": sha, "bytes": size,
+                    "arguments_sha256": sha256_bytes(json.dumps(by_path[name], separators=(",", ":")).encode()),
+                }
+                if name in param_file_identities and param_file_identities[name] != identity:
+                    raise ValueError(f"conflicting param file identity: {name}")
+                param_file_identities[name] = identity
+            used = set()
+            expansions = 0
+            expanded_arg_count = 0
+            expanded_arg_bytes = 0
+            def expand(tokens, active=()):
+                nonlocal expansions, expanded_arg_count, expanded_arg_bytes
+                if len(active) > 64:
+                    raise ValueError("param file nesting limit exceeded (64)")
+                output = []
+                index = 0
+                while index < len(tokens):
+                    token = tokens[index]
+                    path = None
+                    if token == "--flagfile":
+                        if index + 1 >= len(tokens):
+                            raise ValueError("flagfile path missing")
+                        path = tokens[index + 1]
+                        index += 2
+                    elif token.startswith("--flagfile="):
+                        path = token.split("=", 1)[1]
+                        index += 1
+                    elif token.startswith("@") and len(token) > 1:
+                        path = token[1:]
+                        index += 1
+                    else:
+                        output.append(token)
+                        expanded_arg_count += 1
+                        expanded_arg_bytes += len(token)
+                        if expanded_arg_count > 65536 or expanded_arg_bytes > 512 * 1024:
+                            raise ValueError("expanded argument size limit exceeded")
+                        index += 1
+                        continue
+                    if path not in by_path:
+                        raise ValueError(f"required param file expansion unavailable: {path}")
+                    if path in active:
+                        raise ValueError(f"cyclic param file expansion: {path}")
+                    used.add(path)
+                    expansions += 1
+                    if expansions > 1024:
+                        raise ValueError("param file expansion limit exceeded (1024)")
+                    output.extend(expand(by_path[path], (*active, path)))
+                return output
+            expanded = expand([str(value) for value in arguments])
+            if set(by_path) != used:
+                raise ValueError(f"unexpanded param files: {sorted(set(by_path) - used)[:5]}")
+            return expanded, sorted(used)
+        for action in proto.get("actions", []):
+            mnemonic = action.get("mnemonic")
+            if not mnemonic or not re.fullmatch(DEX_ACTION_MNEMONICS, mnemonic):
+                continue
+            mnemonic_counts[mnemonic] += 1
+            raw_args = [str(value) for value in action.get("arguments", [])]
+            try:
+                args, used_params = expand_paramfiles(action, raw_args)
+                param_status = "expanded"
+            except Exception as exc:
+                record_error(f"{mnemonic} param expansion: {type(exc).__name__}: {exc}")
+                args, used_params, param_status = raw_args, [], "blocked"
+            try:
+                input_ids, node_count, edge_count = action_artifacts(
+                    action.get("inputDepSetIds", []), graph_coverage
+                )
+            except Exception as exc:
+                record_error(f"{mnemonic} input depsets: {type(exc).__name__}: {exc}")
+                input_ids, node_count, edge_count = set(), 0, 0
+            paths = []
+            for identifier in sorted(input_ids):
+                try:
+                    paths.append(artifact_path(identifier))
+                except Exception as exc:
+                    record_error(f"{mnemonic} artifact path {identifier}: {type(exc).__name__}: {exc}")
+            config_id = str(action.get("configurationId", ""))
+            config_counts[config_id] += 1
+            config_records[config_id] = configs.get(config_id)
+            raw_digest = sha256_bytes(json.dumps(raw_args, separators=(",", ":")).encode())
+            args_digest = sha256_bytes(json.dumps(args, separators=(",", ":")).encode())
+            action_key = action.get("actionKey")
+            if action_key:
+                action_key_digests[str(action_key)] += 1
+            elif mnemonic != "DexShardsToMerge":
+                record_error(f"action key missing: {mnemonic}")
+            if raw_args:
+                args_digests[args_digest] += 1
+                raw_args_digests[raw_digest] += 1
+            flags = [arg for arg in args if re.search(
+                r"(?:min[_-]?sdk|min.?api|desugar|debug|release|android|core.?library)", arg, re.I
+            )]
+            if raw_args:
+                flag_digest = sha256_bytes(json.dumps(flags, separators=(",", ":")).encode())
+                flag_sets[flag_digest] += 1
+                flag_set_values[flag_digest] = flags
+            if mnemonic == "DexShardsToMerge" and not args:
+                param_status = "unavailable_template"
+            parameter_expansion_counts[param_status] += 1
+            phase = (
+                "desugar" if mnemonic in {"Desugar", "AppendDesugarDexes"} else
+                "merge_template" if mnemonic == "DexShardsToMerge" else
+                "dex_merge" if mnemonic in {"DexMerger", "MergeDexZips"} else
+                "r8_or_dex" if mnemonic in {"AndroidR8", "AndroidDexer", "DexBuilder", "OptimizingDex", "ShardedOptimizingDex", "BuildLegacyDex"} else
+                "unclassified"
+            )
+            phase_action_counts[phase] += 1
+            resolved = []
+            executable = args[0] if args else None
+            executable_resolved = False
+            for value in sorted(set(paths + ([executable] if executable and not executable.startswith("-") else []))):
+                path = Path(value)
+                is_executable = value == executable
+                if path.is_absolute() or ".." in path.parts:
+                    record_error(f"path traversal/absolute artifact rejected: {value}")
+                    resolved.append({"path": value, "status": "unresolved"})
+                    continue
+                candidate = execroot / path
+                is_identity = is_executable or value.lower().endswith(".jar") or re.search(
+                    r"(?:r8|d8|dex|desugar|android\.jar)", value, re.I
+                )
+                if not candidate.is_file():
+                    record_error(f"{'executable' if is_executable else 'input artifact'} unresolved: {value}")
+                    resolved.append({"path": value, "status": "unresolved"})
+                    continue
+                row = {"path": value, "status": "resolved", "kind": "executable" if is_executable else "input"}
+                if is_identity:
+                    key = str(candidate)
+                    if key not in file_hash_cache:
+                        file_hash_cache[key] = (sha256_file(candidate), candidate.stat().st_size)
+                    sha, size = file_hash_cache[key]
+                    row.update(sha256=sha, bytes=size)
+                    file_identities[value] = {
+                        "path": value, "sha256": sha, "bytes": size,
+                        "kind": "executable" if is_executable else "tool_or_jar_input",
+                    }
+                    executable_resolved = executable_resolved or is_executable
+                resolved.append(row)
+            if mnemonic == "DexShardsToMerge" and not args:
+                record_error("DexShardsToMerge template has no command line; per-shard merger arguments unavailable")
+            elif not executable_resolved:
+                record_error(f"action executable unresolved: {executable}")
+            if config_records.get(config_id) is None:
+                record_error(f"configuration identity missing: {config_id}")
+            input_artifact_total += len(input_ids)
+            rendered = json.dumps([action.get("targetId"), paths, args], sort_keys=True).lower()
+            for token in ("app", "jni", "customtabs", "componentactivity"):
+                if token in rendered:
+                    artifact_coverage[token] += 1
+            for value in used_params:
+                if value not in param_file_identities:
+                    record_error(f"param file identity missing: {value}")
+            record = {
+                "mnemonic": mnemonic, "phase": phase, "target": action.get("targetId"),
+                "action_key": action_key,
+                "configuration_id": config_id, "configuration": config_records.get(config_id),
+                "arguments": args if raw_args else None,
+                "arguments_sha256": args_digest if raw_args else None,
+                "raw_arguments_sha256": raw_digest if raw_args else None,
+                "parameter_expansion_status": "unavailable_template" if mnemonic == "DexShardsToMerge" and not args else param_status,
+                "parameter_files": [param_file_identities[value] for value in used_params if value in param_file_identities],
+                "input_artifact_ids": sorted(input_ids), "output_ids": action.get("outputIds", []),
+                "input_artifacts": resolved, "input_depset_nodes": node_count,
+                "input_depset_edges": edge_count, "flags": flags,
+            }
+            score = sum(token in rendered for token in ("app", "jni", "customtabs", "componentactivity"))
+            if len(json.dumps(record, separators=(",", ":")).encode()) <= DEX_MAX_ACTION_RECORD_BYTES:
+                if len(selected) < DEX_FULL_ACTION_LIMIT:
+                    selected.append((score, record))
+                elif score > min(item[0] for item in selected):
+                    selected[selected.index(min(selected, key=lambda item: item[0]))] = (score, record)
+        total = sum(config_counts.values())
+        complete = total > 0 and not errors
+        result = {
+            "status": "pass" if complete else "blocked",
+            "proof_scope": "complete configured aquery action/input capture for this APK graph; does not prove every configured action executed or reran",
+            "reason": None if complete else ("no matching dex/desugar actions" if not total else "; ".join(errors[:10])),
+            "query": expression, "raw_sha256": sha256_bytes(encoded), "raw_bytes": len(encoded),
+            "raw_payload_retained": False, "raw_limit_bytes": DEX_EVIDENCE_LIMIT,
+            "raw_exceeded_summary_limit": len(encoded) > DEX_EVIDENCE_LIMIT,
+            "action_count": total, "action_count_by_mnemonic": dict(mnemonic_counts),
+            "phase_action_counts": dict(phase_action_counts),
+            "configuration_action_counts": dict(config_counts),
+            "configuration_identities": config_records,
+            "action_key_action_counts": dict(action_key_digests),
+            "raw_argument_sha256_action_counts": dict(raw_args_digests),
+            "expanded_argument_sha256_action_counts": dict(args_digests),
+            "flag_set_sha256_action_counts": dict(flag_sets), "flag_sets": flag_set_values,
+            "provenance_action_counts": dict(artifact_coverage),
+            "actions": [record for _, record in selected],
+            "tool_and_runtime_jar_identities": [file_identities[key] for key in sorted(file_identities)],
+            "parameter_file_identities": [param_file_identities[key] for key in sorted(param_file_identities)],
+            "parameter_expansion_action_counts": dict(parameter_expansion_counts),
+            "omitted_action_payload_count": total - len(selected),
+            "configured_action_coverage": "aggregate action counts, configuration identities, action keys, argument digests, flag sets, and input-graph counts cover every selected matching action; omitted_action_payload_count counts actions without retained full records",
+            "input_graph_coverage": dict(graph_coverage),
+            "input_artifact_coverage": "all matching actions' direct and transitive input artifact IDs traversed; actual executable and inputs hashed from execution_root",
+            "parameter_expansion": "aquery paramFiles records and recursive @/--flagfile references resolved; per-action argument digests cover expanded arguments",
+            "input_errors": errors[:64],
+            "bazel_configuration": {
+                "jobs": 2, "android_platforms": "@rules_android//:x86_64",
+                "flutter_mode": "debug", "compilation_mode": "fastbuild",
+                "java_language_level": 17, "bazel": EXPECT["bazel"],
+                "desugar_java8_libs": True,
+                "rules_revision": RULES_REVISION,
+                "module_lock_sha256": sha256_file(root / "MODULE.bazel.lock"),
+            },
+        }
+        def serialized_size():
+            return len(json.dumps(result, separators=(",", ":")).encode("utf-8"))
+        result["serialized_limit_bytes"] = DEX_EVIDENCE_LIMIT
+        result["serialized_bytes"] = 0
+        while True:
+            actual_size = serialized_size()
+            if actual_size > DEX_EVIDENCE_LIMIT and result["actions"]:
+                result["actions"].pop()
+                result["omitted_action_payload_count"] += 1
+                continue
+            if result["serialized_bytes"] != actual_size:
+                result["serialized_bytes"] = actual_size
+                continue
+            break
+        if result["serialized_bytes"] > DEX_EVIDENCE_LIMIT:
+            result["status"] = "blocked"
+            result["reason"] = "aggregate digest and identity coverage exceed 2 MiB serialization limit"
+            result["actions"] = []
+            result["omitted_action_payload_count"] = total
+            result["serialized_bytes"] = 0
+            while result["serialized_bytes"] != serialized_size():
+                result["serialized_bytes"] = serialized_size()
+            def bounded_items(mapping, limit=64):
+                items = sorted(mapping.items(), key=lambda pair: str(pair[0]))
+                return {str(key)[:128]: value for key, value in items[:limit]}, max(0, len(items) - limit)
+            mnemonic_summary, omitted_mnemonics = bounded_items(mnemonic_counts)
+            configuration_summary, omitted_configurations = bounded_items(config_counts)
+            config_identity_summary, omitted_config_identities = bounded_items(config_records)
+            config_identity_summary = {
+                str(key)[:128]: ({
+                    name: value[:160] if isinstance(value, str) else value
+                    for name, value in identity.items()
+                } if isinstance(identity, dict) else identity)
+                for key, identity in config_identity_summary.items()
+            }
+            fallback = {
+                "status": "blocked", "proof_scope": "configured aquery graph only",
+                "reason": "aggregate identities or flag collections exceed 2 MiB serialization limit",
+                "raw_sha256": sha256_bytes(encoded), "raw_bytes": len(encoded),
+                "raw_payload_retained": False, "raw_exceeded_summary_limit": len(encoded) > DEX_EVIDENCE_LIMIT,
+                "serialized_limit_bytes": DEX_EVIDENCE_LIMIT,
+                "action_count": total,
+                "action_count_by_mnemonic": mnemonic_summary,
+                "omitted_mnemonic_count": omitted_mnemonics,
+                "phase_action_counts": dict(phase_action_counts),
+                "configuration_action_counts": configuration_summary,
+                "omitted_configuration_count": omitted_configurations,
+                "configuration_identities": config_identity_summary,
+                "omitted_configuration_identity_count": omitted_config_identities,
+                "input_artifact_count": input_artifact_total,
+                "input_graph_coverage": dict(graph_coverage),
+                "provenance_action_counts": dict(artifact_coverage),
+                "parameter_expansion_action_counts": dict(parameter_expansion_counts),
+                "parameter_file_count": len(param_file_identities),
+                "input_errors": errors[:16],
+                "omitted_collections": [
+                    "action_key_action_counts", "raw_argument_sha256_action_counts",
+                    "expanded_argument_sha256_action_counts", "flag_set_sha256_action_counts",
+                    "flag_sets", "tool_and_runtime_jar_identities",
+                    "parameter_file_identities", "representative_actions",
+                ],
+                "omitted_collection_item_counts": {
+                    "action_keys": sum(action_key_digests.values()),
+                    "raw_argument_digests": sum(raw_args_digests.values()),
+                    "expanded_argument_digests": sum(args_digests.values()),
+                    "flag_sets": len(flag_sets),
+                    "tool_and_runtime_jar_identities": len(file_identities),
+                    "parameter_file_identities": len(param_file_identities),
+                    "representative_actions": total,
+                },
+            }
+            fallback["serialized_bytes"] = 0
+            while True:
+                actual_fallback_size = len(json.dumps(fallback, separators=(",", ":")).encode("utf-8"))
+                if fallback["serialized_bytes"] == actual_fallback_size:
+                    break
+                fallback["serialized_bytes"] = actual_fallback_size
+            if fallback["serialized_bytes"] > DEX_EVIDENCE_LIMIT:
+                minimal = {
+                    "status": "blocked", "proof_scope": "configured aquery graph only",
+                    "reason": "bounded fallback summary exceeds 2 MiB serialization limit",
+                    "raw_sha256": sha256_bytes(encoded), "raw_bytes": len(encoded),
+                    "serialized_limit_bytes": DEX_EVIDENCE_LIMIT,
+                }
+                minimal["serialized_bytes"] = 0
+                while True:
+                    actual_minimal_size = len(json.dumps(minimal, separators=(",", ":")).encode("utf-8"))
+                    if minimal["serialized_bytes"] == actual_minimal_size:
+                        break
+                    minimal["serialized_bytes"] = actual_minimal_size
+                return minimal
+            return fallback
+        return result
+    except Exception as exc:
+        return {
+            "status": "blocked", "proof_scope": "configured aquery graph only",
+            "raw_sha256": sha256_bytes(encoded), "raw_bytes": len(encoded),
+            "raw_payload_retained": False, "reason": f"{type(exc).__name__}: {exc}"[:500],
+        }
+def selected_dex_payload(classes):
+    wanted = {"Landroidx/activity/ComponentActivity;"}
+    wanted.update(
+        desc for desc in classes
+        if "ComponentActivity" in desc and "ExternalSynthetic" in desc
+    )
+    selected = sorted(wanted)
+    overflow = len(selected) > DEX_SELECTED_LIMIT
+    selected = selected[:DEX_SELECTED_LIMIT]
+    payload = {
+        "selection": "ComponentActivity and ComponentActivity-named external synthetics",
+        "limit": DEX_SELECTED_LIMIT,
+        "truncated": overflow,
+        "missing": [desc for desc in selected if desc not in classes],
+        "classes": {desc: classes[desc] for desc in selected if desc in classes},
+        "limitations": ["DEX parser retains class/member access flags, superclass and interfaces; it does not retain method bodies, annotations, debug metadata or code offsets."],
+    }
+    if len(json.dumps(payload, separators=(",", ":")).encode("utf-8")) > 1024 * 1024:
+        payload["truncated"] = True
+        payload["classes"] = {}
+        payload["reason"] = "selected class payload exceeds 1 MiB"
+    return payload
+
 
 
 def parse_badging(text):
@@ -1287,6 +1813,14 @@ def jni_targets(ninja, build_dir, root):
     return targets
 
 
+def ninja_commands(text):
+    return [
+        shlex.split(match.group(1))
+        for line in text.splitlines()
+        if (match := re.match(r"^\[\d+/\d+\]\s+(.+)", line))
+    ]
+
+
 def stock_jni_rebuild(root, apk):
     """Post-build diagnostic only; preserve and identify the original packaged library."""
     global END_AT
@@ -1333,8 +1867,7 @@ def stock_jni_rebuild(root, apk):
         rebuilt = run("jni-verbose-rebuild", [ninja, "-C", build_dir, "-v", target], build_dir, 180)
         entry["executed_stdout"] = rebuilt[:MAX_REBUILD_OUTPUT]
         entry["executed_stdout_truncated"] = len(rebuilt) > MAX_REBUILD_OUTPUT
-        command_lines = [match.group(1) for line in rebuilt.splitlines() if (match := re.match(r"^\[\d+/\d+\]\s+(.+)", line))]
-        commands = [shlex.split(line) for line in command_lines]
+        commands = ninja_commands(rebuilt)
         entry["compile_observed"] = any("-c" in args for args in commands)
         entry["link_observed"] = any(
             "-c" not in args and "-o" in args and
@@ -1361,10 +1894,108 @@ def stock_jni_rebuild(root, apk):
     return result
 
 
+def bazel_jni_commands(root, apk):
+    """Read the log declared by the JNI action in the APK graph; never rebuild it."""
+    result = {"status": "blocked"}
+    try:
+        expression = f'outputs(".*jni_native_x86_64_foreign_cc/CMake[.]log", deps({APK_TARGET}))'
+        graph = json.loads(run(
+            "bazel-jni-action",
+            bazel_argv("aquery", "error", [expression], extra=[
+                "--nofetch", "--output=jsonproto", "--include_artifacts=true", "--include_commandline=false",
+            ]),
+            root, 120, record=False,
+        ))
+        targets = {str(item["id"]): item["label"] for item in graph.get("targets", [])}
+        actions = [
+            action for action in graph.get("actions", [])
+            if targets.get(str(action.get("targetId")), "").endswith("//jni:jni_native_x86_64")
+        ]
+        if len(actions) != 1:
+            raise StageError(f"expected one APK JNI action, found {len(actions)}")
+        action = actions[0]
+        if action.get("mnemonic") != "CcCmakeMakeRule":
+            raise StageError("unexpected JNI action mnemonic")
+        fragments = {str(item["id"]): item for item in graph.get("pathFragments", [])}
+        artifacts = {str(item["id"]): item for item in graph.get("artifacts", [])}
+
+        def output_path(identifier):
+            fragment_id = str(artifacts[str(identifier)]["pathFragmentId"])
+            parts, visited = [], set()
+            while fragment_id != "0":
+                if fragment_id in visited:
+                    raise StageError("cyclic action artifact path")
+                visited.add(fragment_id)
+                fragment = fragments[fragment_id]
+                parts.append(fragment["label"])
+                fragment_id = str(fragment.get("parentId", 0))
+            path = Path(*reversed(parts))
+            if path.is_absolute() or ".." in path.parts or not path.parts or path.parts[0] != "bazel-out":
+                raise StageError("unexpected JNI output path")
+            return path
+
+        paths = [output_path(identifier) for identifier in action.get("outputIds", [])]
+        logs = [path for path in paths if path.as_posix().endswith("jni_native_x86_64_foreign_cc/CMake.log")]
+        libraries = [path for path in paths if path.name == JNI_LIBRARY]
+        if len(logs) != 1 or len(libraries) != 1:
+            raise StageError("JNI action does not declare one log and one library")
+        info = [*bazel_startup(), "info", *bazel_repository_options()]
+        execroot = Path(run("bazel-jni-execroot", [*info, "execution_root"], root, 30, record=False).strip())
+        log_path, library = execroot / logs[0], execroot / libraries[0]
+        if not log_path.is_file() or not library.is_file():
+            raise StageError("APK JNI action log/library not downloaded; no rebuild attempted")
+        configurations = {str(item["id"]): item for item in graph.get("configuration", [])}
+        result.update(
+            target=targets[str(action["targetId"])],
+            action_key=action.get("actionKey"),
+            mnemonic=action["mnemonic"],
+            configuration=configurations.get(str(action.get("configurationId"))),
+            log_path=str(logs[0]), log_sha256=sha256_file(log_path),
+            log_bytes=log_path.stat().st_size, library_path=str(libraries[0]),
+            raw_library_sha256=sha256_file(library),
+        )
+        with log_path.open("rb") as stream:
+            text = stream.read(MAX_REBUILD_OUTPUT).decode("utf-8", errors="replace")
+        result["executed_stdout"] = text
+        result["executed_stdout_truncated"] = result["log_bytes"] > MAX_REBUILD_OUTPUT
+        commands = ninja_commands(text)
+        result["compile_observed"] = any("-c" in args for args in commands)
+        result["link_observed"] = any(
+            "-c" not in args and "-o" in args and Path(args[args.index("-o") + 1]).name == JNI_LIBRARY
+            for args in commands if "-o" in args and args.index("-o") + 1 < len(args)
+        )
+        with zipfile.ZipFile(apk) as archive:
+            result["apk_entry_sha256"] = sha256_bytes(archive.read(f"lib/{PLUGIN_ABI_DIR}/{JNI_LIBRARY}"))
+        saved = TASK / "jni-diagnostic/bazel-libdartjni.so"
+        saved.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(library, saved)
+        result["packaged_identity"] = normalize_native("bazel-jni", saved, ndk_nm())
+        if result["packaged_identity"]["normalize_error"]:
+            raise StageError(result["packaged_identity"]["normalize_error"])
+        if result["packaged_identity"]["normalized_sha256"] != result["apk_entry_sha256"]:
+            raise StageError("APK JNI action output does not normalize to packaged library")
+        if not result["action_key"] or not result["configuration"]:
+            raise StageError("JNI action provenance incomplete")
+        if result["executed_stdout_truncated"] or not result["compile_observed"] or not result["link_observed"]:
+            raise StageError("complete APK JNI compile/link commands not captured")
+        result["status"] = "captured"
+    except Exception as exc:
+        result.update(status="blocked", reason=f"{type(exc).__name__}: {exc}"[:1000])
+    return result
+
+
 def build_stock(rec, inputs):
     root = make_tree("stock")
     rec["tree"] = str(root)
     before = snapshot_tree(root)
+    gradle_home = TASK / "home" / ".gradle"
+    init_dir = gradle_home / "init.d"
+    init_dir.mkdir(parents=True, exist_ok=True)
+    script_path = WS / "ci/apk/dex_capture.init.gradle"
+    shutil.copyfile(script_path, init_dir / "dex_capture.init.gradle")
+    capture_path = TASK / "stock-dex-capture.jsonl"
+    capture_path.unlink(missing_ok=True)
+    rec["dex_capture_script"] = {"path": str(script_path), "sha256": sha256_file(script_path), "output_bound_bytes": 1048576}
     with stage("stock-prepare"):
         verify_locks(root, inputs)
         rec["gradle_pins"] = gradle_pins()
@@ -1403,6 +2034,7 @@ def build_stock(rec, inputs):
                     rec["gradle_stop_error"] = f"{type(exc).__name__}: {exc}"[:500]
             else:
                 rec["gradle_stop_error"] = "gradlew absent: build ended before Flutter injected the wrapper"
+    rec["stock_dex_capture"] = read_stock_dex_capture(capture_path)
     with stage("stock-source-check"):
         source_check(rec, root, before, frozenset())
         if generated_inventory(root) != rec["generated_inputs"]:
@@ -1480,6 +2112,8 @@ def build_bazel(rec, inputs):
         rec["keystore"], rec["keystore_note"] = bazel_keystore(root)
     with stage("bazel-inventory"):
         rec["facts"] = facts_for("bazel", apk)
+    with stage("bazel-dex-actions"):
+        rec["dex_actions"] = bazel_dex_actions(root)
     with stage("bazel-resolution-evidence"):
         try:
             rec["maven_debug_resolution"] = resolved_maven_debug()
@@ -1494,6 +2128,8 @@ def build_bazel(rec, inputs):
             }
         except Exception as exc:
             rec["package_config_error"] = f"{type(exc).__name__}: {exc}"[:500]
+    with stage("bazel-jni-commands"):
+        rec["jni_commands"] = bazel_jni_commands(root, apk)
     rec["contract_failures"] = contract_failures(rec)
 
 
@@ -1546,6 +2182,20 @@ def compare(sa, sb):
             find("unparsed", side, error, kind="unparsed")
         for ref in facts["unresolved_refs"]:
             find("unresolved", side, ref, kind="unresolved")
+    for side, rec in (("stock", sa), ("bazel", sb)):
+        payload = rec.get("facts", {}).get("dex_selected_payload")
+        if not isinstance(payload, dict):
+            find("dex_evidence", side, "selected DEX payload missing or not an object", kind="unparsed")
+        elif payload.get("truncated") or payload.get("missing"):
+            find("dex_evidence", side, {
+                "truncated": payload.get("truncated"),
+                "missing": payload.get("missing"),
+                "limit": payload.get("limit"),
+                "reason": payload.get("reason"),
+            }, kind="unparsed")
+        evidence = rec.get("stock_dex_capture", {}) if side == "stock" else rec.get("dex_actions", {})
+        if evidence.get("status") != "pass":
+            find("dex_pipeline", side, evidence.get("reason", "actual D8 parameters/tool identities not fully captured"), kind="unparsed")
 
     ea = {e["name"]: e for e in fa["entries"]}
     eb = {e["name"]: e for e in fb["entries"]}
@@ -1614,7 +2264,7 @@ def compare(sa, sb):
             find("dex", desc, "class present only in bazel")
         elif desc not in cb:
             find("dex", desc, "class present only in stock")
-        elif ca[desc] != cb[desc]:
+        elif any(ca[desc][key] != cb[desc][key] for key in ("access", "super", "fields", "methods")):
             find("dex", desc, class_diff(ca[desc], cb[desc]))
         elif sa_split.get(desc) != sb_split.get(desc):
             allow("dex", desc, f"identical member inventory; file split differs ({sa_split.get(desc)} vs {sb_split.get(desc)})")
@@ -1908,6 +2558,7 @@ def cmd_verdict():
         "network_restored": ((state.get("runtime") or {}).get("network_restored")) is True,
         "evidence_complete": emit.get("complete") is True,
         "stock_jni_evidence": (arms.get("stock", {}).get("jni_rebuild") or {}).get("status") == "captured",
+        "bazel_jni_evidence": (arms.get("bazel", {}).get("jni_commands") or {}).get("status") == "captured",
         "package_language_evidence": all(
             not arms.get(arm, {}).get("package_config_error") and
             bool(arms.get(arm, {}).get("package_config")) and
@@ -1915,7 +2566,7 @@ def cmd_verdict():
             for arm in ARMS
         ),
     }
-    failed = [name for name in ("build_complete", "parity", "runtime", "network_restored", "evidence_complete", "stock_jni_evidence", "package_language_evidence") if not gates[name]]
+    failed = [name for name in ("build_complete", "parity", "runtime", "network_restored", "evidence_complete", "stock_jni_evidence", "bazel_jni_evidence", "package_language_evidence") if not gates[name]]
     failed += [f"arm_contract:{arm}" for arm, ok in gates["arm_contracts"].items() if not ok]
     machine = not failed
     verdict = {

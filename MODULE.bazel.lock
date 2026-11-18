@@ -380,7 +380,7 @@
     "@@sameri11_rules_flutter_android+//flutter:extensions.bzl%flutter_plugins_ext": {
       "general": {
         "bzlTransitiveDigest": "NS16aBoAM0iS/Shs6RMFCdcqpACVoFEsiT3VA385x2U=",
-        "usagesDigest": "U4edbj2iNIiSBIft4V2ugtYYi0RO4T9AyQbB+i3st3A=",
+        "usagesDigest": "/Wd2CIOrgSnCKDEsNDJuhyC9FFgMlH/5pr+Q2XLn1wI=",
         "recordedInputs": [
           "REPO_MAPPING:,flutter_maven rules_jvm_external++maven+flutter_maven",
           "REPO_MAPPING:,pub_smooth_app sameri11_rules_flutter_core++pub+pub_smooth_app",
@@ -452,6 +452,8 @@
               "consumer_rules": {},
               "build_config_fields": {},
               "recipes": {
+                "jni": "{\"bzl\":\"@@//bazel/flutter:jni.bzl\",\"macro\":\"jni_recipe\",\"root\":true}",
+                "flutter_custom_tabs_android": "{\"bzl\":\"@@//bazel/flutter:custom_tabs.bzl\",\"macro\":\"flutter_custom_tabs_android_recipe\",\"root\":true}",
                 "rive_native": "{\"bzl\":\"@@//bazel/flutter:rive_native.bzl\",\"macro\":\"rive_native_recipe\",\"root\":true}",
                 "sqlite3": "{\"bzl\":\"@@//bazel/flutter:sqlite3.bzl\",\"macro\":\"sqlite3_recipe\",\"root\":true}",
                 "mobile_scanner": "{\"bzl\":\"@@//bazel/flutter:smooth_app_fixes.bzl\",\"macro\":\"mobile_scanner_recipe\",\"root\":true}",
