@@ -331,3 +331,48 @@ maven.override(
     coordinates = "androidx.datastore:datastore-preferences-core-jvm",
     target = "@flutter_maven_debug//:androidx_datastore_datastore_preferences_core_android",
 )
+
+# The lifecycle-common root jar is metadata only; Gradle redirects Android to the JVM classes.
+maven.override(
+    name = "flutter_maven",
+    coordinates = "androidx.lifecycle:lifecycle-common",
+    target = "@flutter_maven//:androidx_lifecycle_lifecycle_common_jvm",
+)
+maven.override(
+    name = "flutter_maven_debug",
+    coordinates = "androidx.lifecycle:lifecycle-common",
+    target = "@flutter_maven_debug//:androidx_lifecycle_lifecycle_common_jvm",
+)
+
+# Classless roots: Gradle redirects their JVM variants to the class-bearing JVM artifact.
+# collection-ktx 1.4.2 has no classes; its extension classes (ArrayMapKt, ArraySetKt, ...) live in collection-jvm.
+maven.override(
+    name = "flutter_maven",
+    coordinates = "androidx.collection:collection",
+    target = "@flutter_maven//:androidx_collection_collection_jvm",
+)
+maven.override(
+    name = "flutter_maven_debug",
+    coordinates = "androidx.collection:collection",
+    target = "@flutter_maven_debug//:androidx_collection_collection_jvm",
+)
+maven.override(
+    name = "flutter_maven",
+    coordinates = "androidx.collection:collection-ktx",
+    target = "@flutter_maven//:androidx_collection_collection_jvm",
+)
+maven.override(
+    name = "flutter_maven_debug",
+    coordinates = "androidx.collection:collection-ktx",
+    target = "@flutter_maven_debug//:androidx_collection_collection_jvm",
+)
+maven.override(
+    name = "flutter_maven",
+    coordinates = "androidx.datastore:datastore-core-okio",
+    target = "@flutter_maven//:androidx_datastore_datastore_core_okio_jvm",
+)
+maven.override(
+    name = "flutter_maven_debug",
+    coordinates = "androidx.datastore:datastore-core-okio",
+    target = "@flutter_maven_debug//:androidx_datastore_datastore_core_okio_jvm",
+)
