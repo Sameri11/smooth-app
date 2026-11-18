@@ -89,6 +89,8 @@ rules_kotlin_extensions.kotlinc_version(
 )
 use_repo(rules_kotlin_extensions, "com_github_google_ksp", "com_github_jetbrains_kotlin", "com_github_jetbrains_kotlin_git", "com_github_pinterest_ktlint", "kotlin_build_tools_impl", "kotlinx_coroutines_core_jvm", "kotlinx_serialization_core_jvm", "kotlinx_serialization_json", "kotlinx_serialization_json_jvm")
 
+register_toolchains("//:app_kotlin_toolchain")
+
 # The proxy and the import stay in this Consumer Module so the generated
 # Android plugin segment declares the sole flutter_maven install.
 maven = use_extension("@rules_jvm_external//:extensions.bzl", "maven")
@@ -164,9 +166,9 @@ plugins.project(
         # Stock selections (Gradle debugRuntimeClasspath at the baseline). The
         # generated install keeps the highest version per group:artifact.
         # These raise scraped/embedding pins and add Android/KMP children.
-        # BOMs, engine artifacts and kotlin-stdlib-jdk7 redirects stay separate.
-        # Sentry Spotlight remains stock-only: extra_artifacts join both modes.
-        # Pool entries alone do not add the multidex/datastore children to the APK.
+        # Both modes resolve the pool; app deps keep Spotlight debug-only.
+        # Maven overrides replace the JVM preferences provider with Android.
+        # The app adds its multidex runtime dependency explicitly.
         "androidx.activity:activity-ktx:1.12.4",
         "androidx.collection:collection-ktx:1.4.2",
         "androidx.core:core-ktx:1.18.0",
@@ -190,6 +192,7 @@ plugins.project(
         "androidx.tracing:tracing-android:1.3.0",
         "androidx.tracing:tracing-ktx:1.3.0",
         "commons-io:commons-io:2.20.0",
+        "io.sentry:sentry-spotlight:8.49.0",
         # Matches the compiler above. The plugin scraper skips kotlin-stdlib,
         # so the runtime pin is declared here.
         "org.jetbrains.kotlin:kotlin-stdlib:2.2.20",
@@ -316,3 +319,15 @@ use_repo(plugins, "flutter_plugins")
 # Maven coordinates the plugins declare. Generated -- see
 # //packages/smooth_app/android/app:plugin_deps_check.
 include("//:plugin_deps.MODULE.bazel")
+
+# Android preferences classes replace the overlapping JVM variant in each mode.
+maven.override(
+    name = "flutter_maven",
+    coordinates = "androidx.datastore:datastore-preferences-core-jvm",
+    target = "@flutter_maven//:androidx_datastore_datastore_preferences_core_android",
+)
+maven.override(
+    name = "flutter_maven_debug",
+    coordinates = "androidx.datastore:datastore-preferences-core-jvm",
+    target = "@flutter_maven_debug//:androidx_datastore_datastore_preferences_core_android",
+)

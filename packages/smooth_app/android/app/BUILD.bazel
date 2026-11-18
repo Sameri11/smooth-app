@@ -3,6 +3,7 @@
 
 load("@rules_flutter_android//flutter:defs.bzl", "flutter_android_app", "flutter_plugin_deps_guards")
 load("@rules_kotlin//kotlin:android.bzl", "kt_android_library")
+load("@rules_kotlin//kotlin:core.bzl", "kt_kotlinc_options")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -38,14 +39,26 @@ flutter_android_app(
         ":app_kotlin",
         "@flutter_plugins//maven:androidx_lifecycle_lifecycle_runtime_android",
         "@flutter_plugins//maven:androidx_lifecycle_lifecycle_viewmodel_android",
+        "@flutter_plugins//maven:androidx_multidex_multidex",
         "@flutter_plugins//maven:androidx_navigationevent_navigationevent_android",
-    ],
+    ] + select({
+        "@rules_flutter_core//flutter:mode_debug": ["@flutter_plugins//maven:io_sentry_sentry_spotlight"],
+        "//conditions:default": [],
+    }),
+)
+
+kt_kotlinc_options(
+    name = "app_kotlinc_options",
+    jvm_target = "17",
+    x_lambdas = "indy",
+    x_sam_conversions = "indy",
 )
 
 # MainActivity, the quick-settings tile service, and the app's in-tree plugin.
 kt_android_library(
     name = "app_kotlin",
     srcs = glob(["src/main/kotlin/**/*.kt"]),
+    kotlinc_opts = ":app_kotlinc_options",
     # These compile dependencies are also exported by the generated inputs;
     # keep their original order because it affects APK ZIP alignment.
     deps = [
