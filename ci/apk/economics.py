@@ -552,6 +552,7 @@ def bazel_repository_options():
 def bazel_common():
     return [
         *bazel_repository_options(),
+        "--jobs=2",
         "--android_platforms=@rules_android//:x86_64",
         "--@rules_flutter_core//flutter:mode=debug",
         "-c", "fastbuild",
@@ -1189,12 +1190,22 @@ def build_stock(rec, inputs):
         rec["generated_inputs"] = generated_inventory(root)
     with stage("stock-build"):
         require_free("stock-build")
-        run(
-            "stock-build-apk",
-            [flutter_bin(), "build", "apk", "--debug", "--target-platform", "android-x64", "--target", ENTRYPOINT, "--no-pub"],
-            root / APP_DIR,
-            2400,
-        )
+        try:
+            run(
+                "stock-build-apk",
+                [flutter_bin(), "build", "apk", "--debug", "--target-platform", "android-x64", "--target", ENTRYPOINT, "--no-pub"],
+                root / APP_DIR,
+                2400,
+            )
+        finally:
+            gradlew = root / APP_DIR / "android" / "gradlew"
+            if gradlew.is_file():
+                try:
+                    run("stock-stop-gradle", [gradlew, "--stop"], gradlew.parent, 120)
+                except StageError as exc:
+                    rec["gradle_stop_error"] = f"{type(exc).__name__}: {exc}"[:500]
+            else:
+                rec["gradle_stop_error"] = "gradlew absent: build ended before Flutter injected the wrapper"
     with stage("stock-source-check"):
         source_check(rec, root, before, frozenset())
         if generated_inventory(root) != rec["generated_inputs"]:
