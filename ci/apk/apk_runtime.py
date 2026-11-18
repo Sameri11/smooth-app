@@ -1,7 +1,7 @@
 """Runtime half of the Smooth APK feasibility driver (called by economics.py `runtime`).
 
 Per contract-valid arm: install, offline setup, scripted English onboarding with
-uiautomator waits on named states, camera-screen PNG and process maps, database check,
+accessibility-tree waits on named states, camera-screen PNG and process maps, database check,
 fatal-log gate, VM loaded-library capture. Network is always restored. Stdlib only.
 
 Every adb call is bounded by a Budget. Failures are recorded per arm with their
@@ -17,10 +17,13 @@ import os
 import re
 import sqlite3
 import subprocess
+import tempfile
 import time
 import urllib.parse
 import urllib.request
+import uuid
 import xml.etree.ElementTree as ET
+import zipfile
 from pathlib import Path
 
 PACKAGE = "org.openfoodfacts.scanner"
@@ -39,6 +42,27 @@ FATAL_RE = re.compile(
 )
 VM_RE = re.compile(r"Dart VM service is listening on http://127\.0\.0\.1:(\d+)/([^/\s]*)/?")
 BOUNDS_RE = re.compile(r"\[(\d+),(\d+)\]\[(\d+),(\d+)\]")
+
+# Accessibility-tree helper: reads the active window without an idle wait. It is built at
+# run time from the frozen SDK build-tools and platform, so nothing is downloaded; its snapshot is read via run-as.
+TREE_PACKAGE = "org.rulesflutter.apkcheck.treedump"
+TREE_CLASS = f"{TREE_PACKAGE}.TreeDumpInstrumentation"
+TREE_SNAPSHOT_PREFIX = "files/window_dump-"
+TREE_KEY_PASS = "treedump-test-key"
+TREE_SOURCE = Path(__file__).with_name("TreeDumpInstrumentation.java")
+TREE_MANIFEST = f"""<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="{TREE_PACKAGE}">
+    <uses-sdk android:minSdkVersion="24" android:targetSdkVersion="34" />
+    <application android:debuggable="true" android:label="Tree dump" />
+    <instrumentation android:name="{TREE_CLASS}" android:targetPackage="{TREE_PACKAGE}" />
+</manifest>
+"""
+
+SNAPSHOT_ABSENT = "SNAPSHOT=absent"
+SNAPSHOT_EMPTY = "SNAPSHOT=empty"
+SNAPSHOT_NONEMPTY = "SNAPSHOT=nonempty"
+SNAPSHOT_PRESENT = "SNAPSHOT=present"
+INSTRUMENTATION_OK = re.compile(r"^INSTRUMENTATION_CODE: -1\s*$", re.MULTILINE)
 
 # Named onboarding states: (name, labels that must be present, labels that must be absent, tap label).
 ONBOARD = [
@@ -185,6 +209,39 @@ def restore_network(log):
     return True
 
 
+def snapshot_path(token):
+    return f"{TREE_SNAPSHOT_PREFIX}{token}.xml"
+
+
+def snapshot_state(adb, limit, path):
+    script = (
+        f"if [ -s {path} ]; then echo {SNAPSHOT_NONEMPTY}; "
+        f"elif [ -e {path} ]; then echo {SNAPSHOT_EMPTY}; "
+        f"else echo {SNAPSHOT_ABSENT}; fi"
+    )
+    out = adb.shell(f"run-as {TREE_PACKAGE} sh -c '{script}'", timeout=limit(30), check=True)
+    # Exact match only: a run-as failure prints an error and never reaches the sentinel.
+    state = out.strip()
+    if state not in (SNAPSHOT_ABSENT, SNAPSHOT_EMPTY, SNAPSHOT_NONEMPTY):
+        raise FlowError(f"run-as did not report the tree snapshot state: {_tail(out, 300)!r}")
+    return state
+
+
+def clear_snapshots(adb, limit):
+    # Removes every snapshot a previous request left, including one a cancelled instrumentation
+    # wrote late. Names carry a request token, so none of them can be accepted by a later request.
+    script = (
+        f"rm -f {TREE_SNAPSHOT_PREFIX}*; "
+        f"for f in {TREE_SNAPSHOT_PREFIX}*; do "
+        f'if [ -e "$f" ]; then echo {SNAPSHOT_PRESENT}; exit 0; fi; done; '
+        f"echo {SNAPSHOT_ABSENT}"
+    )
+    out = adb.shell(f"run-as {TREE_PACKAGE} sh -c '{script}'", timeout=limit(30), check=True)
+    state = out.strip()
+    if state != SNAPSHOT_ABSENT:
+        raise FlowError(f"stale tree snapshots were not removed: {state!r} {_tail(out, 300)!r}")
+
+
 def dump_ui(adb, deadline=None):
     def limit(seconds):
         if deadline is None:
@@ -194,17 +251,17 @@ def dump_ui(adb, deadline=None):
             raise StepDeadline("UI step deadline reached")
         return min(seconds, remaining)
 
-    adb.shell("rm -f /sdcard/window_dump.xml", timeout=limit(30), check=True)
-    # A null root is reported on stderr with exit status zero.
-    out = adb.shell("uiautomator dump /sdcard/window_dump.xml 2>&1", timeout=limit(90), check=True)
-    if "ERROR" in out:
-        raise DumpError(f"uiautomator reported an error: {_tail(out, 300)}")
-    # exec-out can report a missing file on stdout with exit status zero.
-    if adb.shell("test -s /sdcard/window_dump.xml && echo present", timeout=limit(30), check=False).strip() != "present":
-        if deadline is not None and time.time() >= deadline:
-            raise StepDeadline("UI step deadline reached")
-        raise DumpError(f"uiautomator wrote no dump file: {_tail(out, 300)}")
-    _, data = adb.run(["exec-out", "cat", "/sdcard/window_dump.xml"], timeout=limit(60))
+    # The request token names the only file this call may accept.
+    token = uuid.uuid4().hex
+    path = snapshot_path(token)
+    clear_snapshots(adb, limit)
+    out = adb.shell(f"am instrument -w -e token {token} {TREE_PACKAGE}/{TREE_CLASS}", timeout=limit(90), check=True)
+    if not INSTRUMENTATION_OK.search(out):
+        raise DumpError(f"tree helper reported no success line: {_tail(out, 300)}")
+    state = snapshot_state(adb, limit, path)
+    if state != SNAPSHOT_NONEMPTY:
+        raise DumpError(f"tree helper left snapshot state {state}: {_tail(out, 300)}")
+    _, data = adb.run(["exec-out", "run-as", TREE_PACKAGE, "cat", f"/data/data/{TREE_PACKAGE}/{path}"], timeout=limit(60))
     xml = _text(data)
     return xml, parse_nodes(xml)
 
@@ -213,9 +270,9 @@ def parse_nodes(xml):
     try:
         root = ET.fromstring(xml)
     except ET.ParseError as exc:
-        raise FlowError(f"uiautomator XML unparseable: {exc}") from exc
+        raise FlowError(f"tree XML unparseable: {exc}") from exc
     if root.tag != "hierarchy":
-        raise FlowError(f"uiautomator XML root is {root.tag!r}, not hierarchy")
+        raise FlowError(f"tree XML root is {root.tag!r}, not hierarchy")
     nodes = [
         {
             "text": node.get("text", ""),
@@ -227,7 +284,7 @@ def parse_nodes(xml):
         for node in root.iter("node")
     ]
     if not nodes:
-        raise FlowError("uiautomator returned no nodes")
+        raise FlowError("tree XML contains no nodes")
     return nodes
 
 
@@ -334,6 +391,78 @@ def install(adb, apk, package):
     if "Success" not in text:
         raise AdbError(f"adb install did not report Success: {_tail(text, 400)}")
     return {"output_tail": _tail(text, 400)}
+
+
+def _sdk_dir(name):
+    value = os.environ.get(name)
+    if not value:
+        raise FlowError(f"{name} must name the SDK directory for the tree helper")
+    path = Path(value)
+    if not path.is_dir():
+        raise FlowError(f"{name} is not an existing directory: {value}")
+    return path
+
+
+def _tool(args, budget):
+    try:
+        proc = subprocess.run(args, capture_output=True, timeout=budget.clamp(120), check=False)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise FlowError(f"{Path(args[0]).name} did not run: {exc}") from exc
+    if proc.returncode != 0:
+        detail = _tail(_text(proc.stderr) or _text(proc.stdout), 400)
+        raise FlowError(f"{Path(args[0]).name} exited {proc.returncode}: {detail}")
+
+
+def build_tree_helper(work, budget):
+    """Compile, dex, link and sign the tree helper with the frozen SDK build-tools and platform."""
+    tools = _sdk_dir("APK_TREE_BUILD_TOOLS")
+    platform = _sdk_dir("APK_TREE_PLATFORM")
+    for name in ("d8", "aapt2", "apksigner"):
+        if not (tools / name).is_file():
+            raise FlowError(f"{name} missing from APK_TREE_BUILD_TOOLS={tools}")
+    jar = platform / "android.jar"
+    if not jar.is_file():
+        raise FlowError(f"android.jar missing from APK_TREE_PLATFORM={platform}")
+    classes, dex = work / "classes", work / "dex"
+    classes.mkdir()
+    dex.mkdir()
+    manifest = work / "AndroidManifest.xml"
+    manifest.write_text(TREE_MANIFEST, encoding="utf-8")
+    _tool(["javac", "--release", "8", "-classpath", str(jar), "-d", str(classes), str(TREE_SOURCE)], budget)
+    sources = sorted(str(p) for p in classes.rglob("*.class"))
+    _tool([str(tools / "d8"), "--min-api", "24", "--lib", str(jar), "--output", str(dex), *sources], budget)
+    base = work / "base.apk"
+    _tool(
+        [str(tools / "aapt2"), "link", "--manifest", str(manifest), "-I", str(jar),
+         "--min-sdk-version", "24", "--target-sdk-version", "34", "-o", str(base)],
+        budget,
+    )
+    with zipfile.ZipFile(base, "a") as archive:
+        archive.write(dex / "classes.dex", "classes.dex", compress_type=zipfile.ZIP_STORED)
+    keystore = work / "helper.jks"
+    _tool(
+        ["keytool", "-genkeypair", "-keystore", str(keystore), "-storepass", TREE_KEY_PASS,
+         "-keypass", TREE_KEY_PASS, "-alias", "treedump", "-keyalg", "RSA", "-keysize", "2048",
+         "-validity", "3650", "-dname", "CN=treedump"],
+        budget,
+    )
+    signed = work / "tree-helper.apk"
+    _tool(
+        [str(tools / "apksigner"), "sign", "--ks", str(keystore), "--ks-key-alias", "treedump",
+         "--ks-pass", f"pass:{TREE_KEY_PASS}", "--key-pass", f"pass:{TREE_KEY_PASS}",
+         "--out", str(signed), str(base)],
+        budget,
+    )
+    data = signed.read_bytes()
+    return signed, {"sha256": _sha(data), "bytes": len(data), "build_tools": str(tools), "platform": str(platform)}
+
+
+def install_tree_helper(adb, budget):
+    with tempfile.TemporaryDirectory(prefix="tree-helper-") as work:
+        apk, record = build_tree_helper(Path(work), budget)
+        record["install"] = install(adb, apk, TREE_PACKAGE)
+    return record
+
 
 
 def launch(adb, package):
@@ -583,6 +712,7 @@ def run_all(eligible, out_root, results, end, log, checkpoint):
         adb = Adb(budget, log)
         device = ensure_device(adb)
         results["device"] = device
+        results["tree_helper"] = install_tree_helper(adb, budget)
         for index, (arm, apk, apk_sha) in enumerate(eligible):
             remaining = len(eligible) - index
             share = max(budget.left(), 0) / remaining
