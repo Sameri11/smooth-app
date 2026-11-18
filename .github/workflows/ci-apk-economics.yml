@@ -88,6 +88,8 @@ jobs:
           api="$(python3 -c 'import pathlib,re,sys; print(re.search(r"val compileSdkVersion: Int = (\d+)", pathlib.Path(sys.argv[1]).read_text()).group(1))' "$extension")"
           "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-$api" "build-tools;$api.0.0" "ndk;$ndk"
           echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/$ndk" >> "$GITHUB_ENV"
+          echo "APK_TREE_BUILD_TOOLS=$ANDROID_HOME/build-tools/$api.0.0" >> "$GITHUB_ENV"
+          echo "APK_TREE_PLATFORM=$ANDROID_HOME/platforms/android-$api" >> "$GITHUB_ENV"
           echo "$ANDROID_HOME/platform-tools" >> "$GITHUB_PATH"
           df -Pk "$RUNNER_TEMP"
       - name: Build and inspect both debug APKs
