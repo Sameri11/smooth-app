@@ -60,6 +60,14 @@ class AdbError(RuntimeError):
     pass
 
 
+class DumpError(FlowError):
+    pass
+
+
+class StepDeadline(DumpError):
+    pass
+
+
 class BudgetError(RuntimeError):
     pass
 
@@ -177,12 +185,26 @@ def restore_network(log):
     return True
 
 
-def dump_ui(adb):
-    adb.shell("rm -f /sdcard/window_dump.xml", timeout=30, check=False)
-    out = adb.shell("uiautomator dump /sdcard/window_dump.xml", timeout=90, check=True)
+def dump_ui(adb, deadline=None):
+    def limit(seconds):
+        if deadline is None:
+            return seconds
+        remaining = deadline - time.time()
+        if remaining <= 0:
+            raise StepDeadline("UI step deadline reached")
+        return min(seconds, remaining)
+
+    adb.shell("rm -f /sdcard/window_dump.xml", timeout=limit(30), check=True)
+    # A null root is reported on stderr with exit status zero.
+    out = adb.shell("uiautomator dump /sdcard/window_dump.xml 2>&1", timeout=limit(90), check=True)
     if "ERROR" in out:
-        raise FlowError(f"uiautomator reported an error: {_tail(out, 300)}")
-    _, data = adb.run(["exec-out", "cat", "/sdcard/window_dump.xml"], timeout=60)
+        raise DumpError(f"uiautomator reported an error: {_tail(out, 300)}")
+    # exec-out can report a missing file on stdout with exit status zero.
+    if adb.shell("test -s /sdcard/window_dump.xml && echo present", timeout=limit(30), check=False).strip() != "present":
+        if deadline is not None and time.time() >= deadline:
+            raise StepDeadline("UI step deadline reached")
+        raise DumpError(f"uiautomator wrote no dump file: {_tail(out, 300)}")
+    _, data = adb.run(["exec-out", "cat", "/sdcard/window_dump.xml"], timeout=limit(60))
     xml = _text(data)
     return xml, parse_nodes(xml)
 
@@ -216,17 +238,30 @@ def _labels(nodes):
 def wait_for(adb, step, present, absent, timeout):
     limit = adb.budget.clamp(timeout)
     deadline = time.time() + limit
-    while True:
-        xml, nodes = dump_ui(adb)
-        labels = _labels(nodes)
-        if all(any(p.lower() in lab for lab in labels) for p in present) and not any(
-            a.lower() in lab for lab in labels for a in absent
-        ):
-            return xml, nodes
-        if time.time() >= deadline:
-            seen = sorted({lab.strip() for lab in labels if lab.strip()})[:40]
-            raise FlowError(f"step {step}: wanted {present} absent {absent}; labels seen {seen}")
-        time.sleep(POLL_SECONDS)
+    seen, failure = [], "UI step deadline reached before the first dump"
+    while time.time() < deadline:
+        try:
+            xml, nodes = dump_ui(adb, deadline)
+        except StepDeadline:
+            break
+        except AdbError:
+            if time.time() < deadline:
+                raise
+            break
+        except DumpError as exc:
+            # A window without a root can become usable before the step deadline.
+            seen, failure = [], str(exc)
+        else:
+            labels = _labels(nodes)
+            if all(any(p.lower() in lab for lab in labels) for p in present) and not any(
+                a.lower() in lab for lab in labels for a in absent
+            ):
+                return xml, nodes
+            seen, failure = sorted({lab.strip() for lab in labels if lab.strip()})[:40], None
+        time.sleep(min(POLL_SECONDS, max(0, deadline - time.time())))
+    if failure is not None:
+        raise FlowError(f"step {step}: no usable UI dump: {failure}")
+    raise FlowError(f"step {step}: wanted {present} absent {absent}; labels seen {seen}")
 
 
 def tap_label(adb, nodes, label):
