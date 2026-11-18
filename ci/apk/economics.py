@@ -731,7 +731,18 @@ def read_apk(apk, extract, nm, facts):
                 continue
             data = archive.read(info)
             digest = sha256_bytes(data)
-            facts["entries"].append({"name": name, "bytes": len(data), "sha256": digest})
+            facts["entries"].append({
+                "name": name,
+                "bytes": len(data),
+                "sha256": digest,
+                "compressed_bytes": info.compress_size,
+                "compression": info.compress_type,
+            })
+            if name == "assets/flutter_assets/NativeAssetsManifest.json":
+                try:
+                    facts["native_assets_manifest"] = json.loads(data)
+                except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                    facts["parse_errors"].append(f"{name}: {exc}")
             if DEX_RE.fullmatch(name):
                 blobs.append((name, data))
             if name.startswith("lib/") and name.endswith(".so"):
@@ -1197,6 +1208,16 @@ def build_stock(rec, inputs):
                 root / APP_DIR,
                 2400,
             )
+            android = root / APP_DIR / "android"
+            try:
+                rec["gradle_runtime_dependencies"] = run(
+                    "stock-runtime-dependencies",
+                    [android / "gradlew", ":app:dependencies", "--configuration", "debugRuntimeClasspath", "--console=plain"],
+                    android,
+                    600,
+                )
+            except StageError as exc:
+                rec["gradle_runtime_dependencies_error"] = f"{type(exc).__name__}: {exc}"[:500]
         finally:
             gradlew = root / APP_DIR / "android" / "gradlew"
             if gradlew.is_file():
@@ -1219,6 +1240,24 @@ def build_stock(rec, inputs):
     with stage("stock-inventory"):
         rec["facts"] = facts_for("stock", apk)
     rec["contract_failures"] = contract_failures(rec)
+
+
+def resolved_maven_debug():
+    path = TASK / "bazel-output-base/external/rules_jvm_external++maven+flutter_maven_debug/coursier-deps.json"
+    raw = path.read_bytes()
+    resolved = json.loads(raw)
+    dependencies = resolved.get("dependencies")
+    if not isinstance(dependencies, list) or not dependencies:
+        raise StageError("resolved debug Maven dependency list is missing or empty")
+    return {
+        "metadata_file": str(path.relative_to(TASK)),
+        "metadata_sha256": sha256_bytes(raw),
+        "conflict_resolution": resolved.get("conflict_resolution"),
+        "artifacts": [
+            {key: dep.get(key) for key in ("coord", "file", "sha256", "directDependencies")}
+            for dep in dependencies
+        ],
+    }
 
 
 def build_bazel(rec, inputs):
@@ -1263,6 +1302,11 @@ def build_bazel(rec, inputs):
         rec["keystore"], rec["keystore_note"] = bazel_keystore(root)
     with stage("bazel-inventory"):
         rec["facts"] = facts_for("bazel", apk)
+    with stage("bazel-resolution-evidence"):
+        try:
+            rec["maven_debug_resolution"] = resolved_maven_debug()
+        except Exception as exc:
+            rec["maven_debug_resolution_error"] = f"{type(exc).__name__}: {exc}"[:500]
     rec["contract_failures"] = contract_failures(rec)
 
 
