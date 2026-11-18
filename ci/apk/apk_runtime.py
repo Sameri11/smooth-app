@@ -71,9 +71,9 @@ ONBOARD = [
     ("foods", ["Choose foods that are good for you"], ["Welcome !"], "Next"),
     ("planet", ["good for the planet"], ["Choose foods that are good for you"], "Next"),
     ("preferences", ["Next"], ["good for the planet"], "Next"),
-    ("camera", ["Later"], [], "Later"),
+    ("camera", ["Camera access", "Later"], [], "Later"),
 ]
-FINAL_STATE = ("final", ["Search for a product", "Last scanned products"], [])
+FINAL_STATE = ("final", ["Search for a product", "Welcome to Open Food Facts"], ["Camera access"])
 
 
 class FlowError(RuntimeError):
@@ -288,8 +288,12 @@ def parse_nodes(xml):
     return nodes
 
 
+def _label(text):
+    return " ".join(text.split()).lower()
+
+
 def _labels(nodes):
-    return [f"{node['text']} {node['content_desc']}".lower() for node in nodes]
+    return [_label(f"{node['text']} {node['content_desc']}") for node in nodes]
 
 
 def wait_for(adb, step, present, absent, timeout):
@@ -310,8 +314,8 @@ def wait_for(adb, step, present, absent, timeout):
             seen, failure = [], str(exc)
         else:
             labels = _labels(nodes)
-            if all(any(p.lower() in lab for lab in labels) for p in present) and not any(
-                a.lower() in lab for lab in labels for a in absent
+            if all(any(_label(p) in lab for lab in labels) for p in present) and not any(
+                _label(a) in lab for lab in labels for a in absent
             ):
                 return xml, nodes
             seen, failure = sorted({lab.strip() for lab in labels if lab.strip()})[:40], None
@@ -322,10 +326,10 @@ def wait_for(adb, step, present, absent, timeout):
 
 
 def tap_label(adb, nodes, label):
-    want = label.lower()
-    hits = [n for n in nodes if want in (n["text"].lower(), n["content_desc"].lower())]
+    want = _label(label)
+    hits = [n for n in nodes if want in (_label(n["text"]), _label(n["content_desc"]))]
     if not hits:
-        hits = [n for n in nodes if want in n["text"].lower() or want in n["content_desc"].lower()]
+        hits = [n for n in nodes if want in _label(n["text"]) or want in _label(n["content_desc"])]
     if not hits:
         raise FlowError(f"no node labelled {label!r} to tap")
     hits.sort(key=lambda n: not n["clickable"])
@@ -526,17 +530,22 @@ def db_check(adb, package, out):
     return rec
 
 
-def rpc(base, method, **params):
+RPC_TIMEOUT = 20
+
+
+def rpc(base, method, budget, **params):
     query = urllib.parse.urlencode(params)
     url = f"{base}/{method}" + (f"?{query}" if query else "")
-    with urllib.request.urlopen(url, timeout=20) as response:
+    # The socket timeout never outlasts what the arm has left.
+    with urllib.request.urlopen(url, timeout=budget.clamp(RPC_TIMEOUT)) as response:
         body = json.loads(response.read().decode("utf-8"))
     if "error" in body:
         raise FlowError(f"VM {method} error: {str(body['error'])[:300]}")
     return body.get("result") or {}
 
 
-MAX_SCRIPTS = 2000
+# Observed 5815 scripts for one Smooth isolate; the bound stops a runaway VM without cutting that.
+MAX_SCRIPTS = 8000
 MIN_SOURCE_BUDGET = 30
 
 
@@ -544,27 +553,40 @@ def sha_text(text):
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
-def vm_sources(base, isolate_id, budget):
-    scripts = rpc(base, "getScripts", isolateId=isolate_id).get("scripts") or []
+def record_source(rec, uri, digest):
+    # The VM can list several script objects under one URI (SDK part files shared by libraries).
+    # Each URI keeps the sorted list of all its hashes, so arms compare equal only when every
+    # URI has the same multiset of sources.
+    hashes = rec["sources"].setdefault(uri, [])
+    hashes.append(digest)
+    hashes.sort()
+
+
+def vm_sources(base, isolate_id, budget, rec):
+    # Fills rec in place, so a failure keeps the scripts hashed so far.
+    scripts = rpc(base, "getScripts", budget, isolateId=isolate_id).get("scripts") or []
+    rec["script_count"] = len(scripts)
     if len(scripts) > MAX_SCRIPTS:
         raise FlowError(f"{len(scripts)} scripts exceed the {MAX_SCRIPTS} bound")
-    sources = {}
     for script in scripts:
         if budget.left() < MIN_SOURCE_BUDGET:
-            raise FlowError("out of budget while hashing VM script sources")
-        obj = rpc(base, "getObject", isolateId=isolate_id, objectId=script["id"])
+            raise FlowError(f"out of budget after {rec['scripts_hashed']} of {len(scripts)} VM script sources")
+        obj = rpc(base, "getObject", budget, isolateId=isolate_id, objectId=script["id"])
         text = obj.get("source")
         if not isinstance(text, str) or not script.get("uri"):
             raise FlowError(f"script {script.get('uri')!r} has no source text")
-        sources[script["uri"]] = sha_text(text)
-    return sources
+        record_source(rec, script["uri"], sha_text(text))
+        rec["scripts_hashed"] += 1
 
 
 def vm_probe(adb, logtext):
     rec = {
         "status": "unavailable",
+        "isolate_id": None,
         "libraries": [],
         "libraries_complete": False,
+        "script_count": None,
+        "scripts_hashed": 0,
         "sources": {},
         "sources_complete": False,
         "widget_creation": None,
@@ -580,25 +602,20 @@ def vm_probe(adb, logtext):
     try:
         adb.run(["forward", f"tcp:{host_port}", f"tcp:{device_port}"], timeout=30)
         base = f"http://127.0.0.1:{host_port}/{token}"
-        vm = rpc(base, "getVM")
+        vm = rpc(base, "getVM", adb.budget)
         isolates = vm.get("isolates") or []
         if not isolates:
             raise FlowError("VM reported no isolates")
         isolate_id = isolates[0]["id"]
-        isolate = rpc(base, "getIsolate", isolateId=isolate_id)
+        rec["isolate_id"] = isolate_id
+        isolate = rpc(base, "getIsolate", adb.budget, isolateId=isolate_id)
         libraries = isolate.get("libraries") or []
         uris = sorted({lib["uri"] for lib in libraries if "uri" in lib})
-        sources = vm_sources(base, isolate_id, adb.budget)
-        tracked = rpc(base, "ext.flutter.inspector.isWidgetCreationTracked", isolateId=isolate_id)
-        rec.update(
-            status="ok",
-            libraries=uris,
-            libraries_complete=bool(uris) and isolate.get("type") == "Isolate",
-            sources=sources,
-            sources_complete=bool(uris) and set(uris) <= set(sources),
-            widget_creation=json.dumps(tracked.get("result", tracked), sort_keys=True),
-            isolate_id=isolate_id,
-        )
+        rec.update(libraries=uris, libraries_complete=bool(uris) and isolate.get("type") == "Isolate")
+        vm_sources(base, isolate_id, adb.budget, rec)
+        rec["sources_complete"] = bool(uris) and set(uris) <= set(rec["sources"])
+        tracked = rpc(base, "ext.flutter.inspector.isWidgetCreationTracked", adb.budget, isolateId=isolate_id)
+        rec.update(status="ok", widget_creation=json.dumps(tracked.get("result", tracked), sort_keys=True))
     except Exception as exc:
         rec["error"] = f"{type(exc).__name__}: {str(exc)[:300]}"
     finally:
