@@ -1,8 +1,8 @@
-name: Current debug APK CI timing
+name: Debug APK remote output comparison
 
 on:
   push:
-    branches: [prototype/apk-ci-economics]
+    branches: [prototype/apk-output-policy]
     paths:
       - '.github/workflows/ci-apk-timing.yml'
       - 'ci/apk/timing.py'
@@ -19,16 +19,19 @@ concurrency:
 env:
   CI: 'true'
   FLUTTER_SUPPRESS_ANALYTICS: 'true'
+  ENGINE: bazel
 
 jobs:
-  stock-cold:
-    name: stock / cold
+  bazel-cold:
+    name: bazel / cold
     if: github.repository == 'Sameri11/smooth-app'
     runs-on: ubuntu-24.04
     timeout-minutes: 60
+    outputs:
+      apk_proof: ${{ steps.build.outputs.apk_proof }}
     env:
-      ENGINE: stock
       SCENARIO: cold
+      APK_DOWNLOAD_OUTPUTS: all
     steps: &workload
       - name: Start required-result clock and isolate state
         shell: bash
@@ -55,7 +58,14 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
-          fetch-depth: 5
+          fetch-depth: 6
+      - name: Check out frozen rules
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: Sameri11/rules_flutter
+          ref: 6ab5ab906916abfdbd80d8a843bee87df500766d
+          path: .ci-rules
+          persist-credentials: false
       - name: Prepare isolated tracked source
         shell: bash
         run: python3 ci/apk/timing.py prepare --engine "$ENGINE" --scenario "$SCENARIO"
@@ -98,17 +108,21 @@ jobs:
           PY
           python3 ci/apk/timing_cache.py restore --engine "$ENGINE" --scenario "$SCENARIO"
           rm -rf "$RUNNER_TEMP/apk-timing-cache"
-      - name: Install verified Flutter
+      - name: Install verified Flutter and Bazelisk
         if: env.SCENARIO == 'cold'
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p "$PUB_CACHE"
+          mkdir -p "$PUB_CACHE" "$BAZELISK_HOME"
           curl --fail --location --retry 2 --output "$RUNNER_TEMP/flutter.tar.xz" \
             https://storage.googleapis.com/flutter_infra_release/releases/stable/linux/flutter_linux_3.41.8-stable.tar.xz
           echo "0c7e47fc39ef86290b41707d687bdca7f82b277267a6ef74717f8e88ac423de1  $RUNNER_TEMP/flutter.tar.xz" | sha256sum --check
           tar -xJf "$RUNNER_TEMP/flutter.tar.xz" -C "$RUNNER_TEMP"
           rm "$RUNNER_TEMP/flutter.tar.xz"
+          curl --fail --location --retry 2 --output "$RUNNER_TEMP/bazel" \
+            https://github.com/bazelbuild/bazelisk/releases/download/v1.29.0/bazelisk-linux-amd64
+          echo "5a408715e932c0250d28bd84555f12edbf70117de42f9181691c736eacc4a992  $RUNNER_TEMP/bazel" | sha256sum --check
+          chmod +x "$RUNNER_TEMP/bazel"
       - name: Verify tools and install pinned Android dependencies
         shell: bash
         run: |
@@ -130,11 +144,21 @@ jobs:
           echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
           df -Pk "$RUNNER_TEMP"
       - name: Build and validate current APK
+        id: build
         shell: bash
-        run: python3 ci/apk/timing.py run --engine "$ENGINE" --scenario "$SCENARIO"
+        env:
+          BAZEL_CACHE_HOST: ${{ secrets.BAZEL_CACHE_HOST }}
+          BAZEL_CACHE_PROJECT_ID: ${{ secrets.BAZEL_CACHE_PROJECT_ID }}
+          BAZEL_CACHE_TOKEN_RW: ${{ secrets.BAZEL_CACHE_TOKEN_RW }}
+        run: |
+          root="$RUNNER_TEMP/apk-timing"
+          trap 'rm -f "$root/remote-cache.bazelrc" "$root/logs/bep.json" "$root/logs/bazel-profile.json"' EXIT
+          python3 ci/apk/timing.py run --engine "$ENGINE" --scenario "$SCENARIO"
       - name: Pack bounded cache publication
         id: pack
         shell: bash
+        env:
+          BAZEL_CACHE_TOKEN_RW: ${{ secrets.BAZEL_CACHE_TOKEN_RW }}
         run: python3 ci/apk/timing_cache.py pack --engine "$ENGINE" --scenario "$SCENARIO"
       - name: Guard included cache capacity
         if: steps.pack.outputs.upload == 'true'
@@ -179,10 +203,22 @@ jobs:
           d = json.loads(p.read_text()); listing = json.loads((root / 'apk-cache-after.json').read_text())
           rows = [c for c in listing['actions_caches'] if c['key'] == os.environ['PUBLISHED_KEY']]
           if len(rows) != 1: raise RuntimeError('Exact published snapshot missing or duplicated')
+          if rows[0]['size_in_bytes'] > 3 * 1024**3: raise RuntimeError('Actual seed capacity exceeded')
           if sum(c['size_in_bytes'] for c in listing['actions_caches']) > 9 * 1024**3: raise RuntimeError('Actual cache capacity exceeded')
           d['cache_upload_end_epoch'] = time.time(); d['published_cache'] = rows[0]
           p.write_text(json.dumps(d))
           PY
+      - name: Shut down isolated Bazel server
+        if: always()
+        shell: bash
+        run: |
+          root="$RUNNER_TEMP/apk-timing"
+          base="$root/bazel-output-base"
+          if [[ -x "$RUNNER_TEMP/bazel" && -d "$base/server" ]]; then
+            cd "$root/trees/bazel"
+            HOME="$root/home" timeout 30 "$RUNNER_TEMP/bazel" --nosystem_rc --nohome_rc --noworkspace_rc \
+              --output_base="$base" shutdown
+          fi
       - name: Emit compact evidence without artifacts
         if: always()
         shell: bash
@@ -196,22 +232,49 @@ jobs:
           APK_TIMING_JOB_STATUS: ${{ job.status }}
         run: python3 ci/apk/timing.py verify --engine "$ENGINE" --scenario "$SCENARIO"
 
-  stock-warm:
-    name: stock / warm
-    needs: stock-cold
+  bazel-warm-all:
+    name: bazel / warm / all
+    needs: bazel-cold
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     env:
-      ENGINE: stock
       SCENARIO: warm
+      APK_DOWNLOAD_OUTPUTS: all
+      APK_SEED_PROOF: ${{ needs.bazel-cold.outputs.apk_proof }}
     steps: *workload
 
-  stock-lib:
-    name: stock / lib
-    needs: stock-warm
+  bazel-warm-toplevel:
+    name: bazel / warm / toplevel
+    needs: [bazel-cold, bazel-warm-all]
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     env:
-      ENGINE: stock
+      SCENARIO: warm
+      APK_DOWNLOAD_OUTPUTS: toplevel
+      APK_SEED_PROOF: ${{ needs.bazel-cold.outputs.apk_proof }}
+    steps: *workload
+
+  bazel-lib-toplevel:
+    name: bazel / lib / toplevel
+    needs: [bazel-cold, bazel-warm-toplevel]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    outputs:
+      apk_proof: ${{ steps.build.outputs.apk_proof }}
+    env:
       SCENARIO: lib
+      APK_DOWNLOAD_OUTPUTS: toplevel
+      APK_SEED_PROOF: ${{ needs.bazel-cold.outputs.apk_proof }}
+    steps: *workload
+
+  bazel-lib-all:
+    name: bazel / lib / all
+    needs: [bazel-cold, bazel-lib-toplevel]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      SCENARIO: lib
+      APK_DOWNLOAD_OUTPUTS: all
+      APK_SEED_PROOF: ${{ needs.bazel-cold.outputs.apk_proof }}
+      APK_EDIT_PROOF: ${{ needs.bazel-lib-toplevel.outputs.apk_proof }}
     steps: *workload

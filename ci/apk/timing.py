@@ -32,7 +32,7 @@ SDK = Path(os.environ.get("RUNNER_TEMP", tempfile.gettempdir())) / "flutter"
 PUB = Path(os.environ.get("RUNNER_TEMP", tempfile.gettempdir())) / "cache-state" / "pub"
 BAZELISK = Path(os.environ.get("RUNNER_TEMP", tempfile.gettempdir())) / "cache-state" / "bazelisk"
 WORKLOAD_HEAD = "6e7408fda8e46bc97a0d8f2b33a801cf27c8dabe"
-PREVIOUS_HARNESS_HEAD = "a9f038ef4aa9c5c14545ef9c214cd42e22bd266d"
+PREVIOUS_HARNESS_HEAD = "5e3a6a1951c2f306c665fc0bd94e940c4c438f7a"
 HARNESS_FILES = {
     ".github/workflows/ci-apk-timing.yml", "ci/apk/timing.py", "ci/apk/timing_cache.py",
 }
@@ -329,7 +329,55 @@ def runner_metadata():
 
 
 
+def requested_download_outputs(engine, scenario):
+    if engine != "bazel":
+        return None
+    mode = os.environ.get("APK_DOWNLOAD_OUTPUTS")
+    if mode not in ("all", "toplevel") or (scenario == "cold" and mode != "all"):
+        raise RuntimeError("APK_DOWNLOAD_OUTPUTS must be all or toplevel; cold seed requires all")
+    return mode
+
+
+def proof_identity(identity):
+    run, attempt, head = (identity[key] for key in ("run_id", "attempt", "head"))
+    if not (re.fullmatch(r"[0-9]+", run) and re.fullmatch(r"[0-9]+", attempt)
+            and re.fullmatch(r"[0-9a-f]{40}", head)):
+        raise RuntimeError("APK proof requires exact run, attempt and commit identity")
+    return f"{run}/{attempt}/{head}"
+
+
+def policy_references(identity, env):
+    prefix = proof_identity(identity)
+    scenario = identity["scenario"]
+    references = {}
+    for key, name, predecessor, required in (
+        ("seed_sha256", "APK_SEED_PROOF", "cold", scenario != "cold"),
+        ("edit_sha256", "APK_EDIT_PROOF", "lib",
+         scenario == "lib" and identity["download_outputs"] == "all"),
+    ):
+        proof = env.get(name, "")
+        if not required:
+            if proof:
+                raise RuntimeError(f"unexpected {name} for this APK policy row")
+            continue
+        match = re.fullmatch(prefix + f"/{predecessor}/([0-9a-f]{{64}})", proof)
+        if not match:
+            raise RuntimeError(f"{name} is absent, malformed or from the wrong run or scenario")
+        references[key] = match[1]
+    return references
+
+
+def require_policy_apk(scenario, references, apk_sha256):
+    if scenario == "warm" and apk_sha256 != references["seed_sha256"]:
+        raise RuntimeError("unchanged APK digest does not match the cold seed")
+    if scenario == "lib" and apk_sha256 == references["seed_sha256"]:
+        raise RuntimeError("edited APK digest matches the unedited APK")
+    if "edit_sha256" in references and apk_sha256 != references["edit_sha256"]:
+        raise RuntimeError("edited APK digests do not match across policies")
+
+
 def cmd_prepare(args):
+    download_outputs = requested_download_outputs(args.engine, args.scenario)
     ROOT.mkdir(parents=True, exist_ok=True)
     head = dispatch_head()
     manifest = verify_frozen()
@@ -340,6 +388,7 @@ def cmd_prepare(args):
                           "workload_head": WORKLOAD_HEAD,
                           "attempt": os.environ.get("GITHUB_RUN_ATTEMPT", ""),
                           "engine": args.engine, "scenario": args.scenario,
+                          "download_outputs": download_outputs,
                           "workflow_start_epoch": None,
                           "inputs_sha256": digest(json.dumps(manifest["inputs"], sort_keys=True).encode()),
                           "rules_revision": manifest["rules"]["revision"],
@@ -355,13 +404,16 @@ def cmd_prepare(args):
              "prior_host_runtime_proof": {"run_id": "44291552151", "scope": "seven-state offline runtime; frozen consumer configuration only"},
              "tree": str(tree), "tracked_source": tracked_source_fingerprint(tree),
              "artifact": None, "cache_metrics": None}
+    if download_outputs:
+        state["output_policy"] = policy_references(state["identity"], os.environ)
     save(state)
     clock = ROOT / "workflow-clock.json"
     if clock.is_file():
         state["workflow_clock"] = json.loads(clock.read_text())
         state["identity"]["workflow_start_epoch"] = state["workflow_clock"].get("job_start_epoch")
     save(state)
-    print(json.dumps({"status": "prepared", "tree": str(tree), "head": head}))
+    print(json.dumps({"status": "prepared", "tree": str(tree), "head": head,
+                      "download_outputs": download_outputs}))
 
 
 def job_env(engine, state):
@@ -406,10 +458,13 @@ def run_remote_config(state):
     scrub = ROOT / "remote-scrubbing.textproto"
     scrub.write_text('rules {\n  matcher { kind: ".*" label: ".*" mnemonic: ".*" match_tools: true }\n'
                      '  transform { salt: "' + salt + '" }\n}\n')
+    identity = state["identity"]
+    cold = identity["scenario"] == "cold"
     state["remote_cache"] = {"salt": salt, "rc_mode": oct(rc.stat().st_mode & 0o777),
                              "scrubbing_sha256": file_hash(scrub), "disk_cache": False,
-                             "accept_cached": state["identity"]["scenario"] != "cold",
-                             "upload_local_results": True, "upload_async": False}
+                             "accept_cached": not cold, "upload_local_results": cold, "upload_async": False,
+                             "download_outputs": identity.get("download_outputs") or "all",
+                             "remote_execution": False}
     return rc, scrub
 
 
@@ -432,11 +487,12 @@ def bazel_argv(root, command_name, env, *, bep=None, remote=True, extra=()):
              "--tool_java_runtime_version=remotejdk_17", "--java_language_version=17",
              "--java_runtime_version=remotejdk_17", "--desugar_java8_libs", "--color=no", "--curses=no", *extra]
     if remote:
-        args += ["--experimental_remote_scrubbing_config=" + str(scrub),
-                 "--remote_accept_cached=" + str(_ACTIVE_STATE["identity"]["scenario"] != "cold").lower(),
-                 "--remote_upload_local_results=true", "--remote_cache_async=false",
-                 "--remote_download_outputs=all", "--announce_rc=false",
-                 "--nobuild_event_json_file_path_conversion"]
+        policy = _ACTIVE_STATE["remote_cache"]
+        args += ["--experimental_remote_scrubbing_config=" + str(scrub), "--remote_executor=",
+                 "--remote_accept_cached=" + str(policy["accept_cached"]).lower(),
+                 "--remote_upload_local_results=" + str(policy["upload_local_results"]).lower(),
+                 "--remote_cache_async=false", "--remote_download_outputs=" + policy["download_outputs"],
+                 "--announce_rc=false", "--nobuild_event_json_file_path_conversion"]
     if bep:
         args.append("--build_event_json_file=" + str(bep))
     args.append("--lockfile_mode=error")
@@ -565,6 +621,7 @@ def collect_profile(path):
         phase_spans, action_spans, mnemonics = {}, [], {}
         remote_categories = {key: {"event_count": 0, "max_event_span_seconds": 0.0}
                              for key in sorted(REMOTE_PROFILE_CATEGORIES)}
+        download_spans = []
         action_duration = 0.0
         action_count = 0
         for event in events:
@@ -582,6 +639,8 @@ def collect_profile(path):
                 remote_categories[category]["event_count"] += 1
                 remote_categories[category]["max_event_span_seconds"] = max(
                     remote_categories[category]["max_event_span_seconds"], span)
+            if category == "remote output download":
+                download_spans.append((ts, ts + duration))
             if category != "action processing":
                 continue
             args = event.get("args") if isinstance(event.get("args"), dict) else {}
@@ -595,6 +654,11 @@ def collect_profile(path):
         for _, change in sorted(action_spans, key=lambda item: (item[0], item[1])):
             concurrent += change
             peak_concurrent = max(peak_concurrent, concurrent)
+        download_end = download_union = 0
+        for start, end in sorted(download_spans):
+            download_union += max(0, end - max(start, download_end))
+            download_end = max(download_end, end)
+        remote_categories["remote output download"]["union_seconds"] = round(download_union / 1_000_000, 6)
         return {
             "status": "available",
             "schema": "Bazel 9.2 traceEvents: ph=X; build phase marker, action processing, remote profiler categories",
@@ -604,12 +668,8 @@ def collect_profile(path):
             "action_duration_sum_seconds": round(action_duration / 1_000_000, 6),
             "action_duration_semantics": "sum of action processing spans; overlaps and is not wall time",
             "action_mnemonic_counts": dict(sorted(mnemonics.items())),
-            "remote_category_events": {
-                key: {"event_count": value["event_count"],
-                      "max_event_span_seconds": round(value["max_event_span_seconds"], 6)}
-                for key, value in remote_categories.items()
-            },
-            "remote_category_semantics": "exact ProfilerTask category counts/spans; remote network is not upload-only",
+            "remote_category_events": remote_categories,
+            "remote_category_semantics": "counts and max spans of complete events, seconds; download union merges overlaps",
         }
     finally:
         with contextlib.suppress(OSError):
@@ -677,6 +737,15 @@ def cmd_run(args):
     head = dispatch_head()
     if ident["head"] != head:
         raise RuntimeError("checkout HEAD/GITHUB_SHA identity changed")
+    mode = requested_download_outputs(args.engine, args.scenario)
+    if ident.get("download_outputs") != mode:
+        raise RuntimeError("download policy differs from prepared identity")
+    references = policy_references(ident, os.environ) if mode else {}
+    if mode and references != state.get("output_policy"):
+        raise RuntimeError("APK digest references differ from prepared identity")
+    if mode and (ident["run_id"], ident["attempt"]) != (os.environ.get("GITHUB_RUN_ID"),
+                                                         os.environ.get("GITHUB_RUN_ATTEMPT")):
+        raise RuntimeError("run or attempt differs from prepared identity")
     tree = Path(state["tree"])
     verify_frozen(tree)
     _ACTIVE_STATE = state
@@ -727,6 +796,9 @@ def cmd_run(args):
             state["bazel_apk"] = apks[0] if Path(apks[0]).is_absolute() else str(tree / apks[0])
         with phase(state, "artifact-validation"):
             validate_apk(args.engine, tree, args.scenario, state)
+            if mode:
+                require_policy_apk(args.scenario, references, state["artifact"]["sha256"])
+                state["output_policy"]["passed"] = True
         state["required_result_epoch"] = time.time()
         state["required_result_duration_seconds"] = round(state["required_result_epoch"] - required_start, 6)
         if args.engine == "bazel":
@@ -770,6 +842,9 @@ def cmd_run(args):
             if start is not None and state.get("required_result_epoch") is not None:
                 state["required_result_duration_seconds"] = round(state["required_result_epoch"] - float(start), 6)
         save(state)
+    if mode and state["status"] == "passed":
+        with Path(os.environ["GITHUB_OUTPUT"]).open("a", encoding="utf-8") as output:
+            output.write(f"apk_proof={proof_identity(ident)}/{args.scenario}/{state['artifact']['sha256']}\n")
     print(json.dumps({"status": state["status"], "failure": state.get("failure"),
                       "artifact": state.get("artifact"), "required_result_duration_seconds": state.get("required_result_duration_seconds")}))
     return 0 if state["status"] == "passed" else 1
@@ -784,7 +859,8 @@ def cmd_emit(args):
                  "identity": {"head": os.environ.get("GITHUB_SHA", ""),
                               "run_id": os.environ.get("GITHUB_RUN_ID", ""),
                               "attempt": os.environ.get("GITHUB_RUN_ATTEMPT", ""),
-                              "engine": args.engine, "scenario": args.scenario},
+                              "engine": args.engine, "scenario": args.scenario,
+                              "download_outputs": os.environ.get("APK_DOWNLOAD_OUTPUTS")},
                  "phases": [], "commands": [], "errors": []}
     for sidecar in (ROOT / "cache.json", ROOT / "workflow-clock.json"):
         if sidecar.is_file():
