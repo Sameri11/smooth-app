@@ -40,7 +40,7 @@ def generated_roots():
 
 def specs(engine, scenario):
     if engine == "stock" and scenario == "cold": return "cold", [("flutter", "sdk", True), ("cache-state/pub", "pub", True), ("home/.gradle", "gradle-home", False), ("home/.android/debug.keystore", "debug-keystore", False)] + generated_roots()
-    if engine == "bazel" and scenario == "cold": return "cold", [("flutter", "sdk", True), ("cache-state/pub", "pub", True), ("repository-cache", "repository-cache", True), ("cache-state/bazelisk", "bazelisk", True), ("bazel", "bazel-binary", True)]
+    if engine == "bazel" and scenario == "cold": return "cold", [("flutter", "sdk", True), ("cache-state/pub", "pub", True), ("cache-state/bazelisk", "bazelisk", True), ("bazel", "bazel-binary", True)]
     if engine == "stock" and scenario == "lib": return "lib", generated_roots()
     return None, []
 
@@ -48,6 +48,9 @@ def base_for(rel, engine):
     if rel == "flutter" or rel.startswith("flutter/") or rel == "cache-state/pub" or rel.startswith("cache-state/pub/") or rel == "cache-state/bazelisk" or rel.startswith("cache-state/bazelisk/") or rel == "bazel" or rel.startswith("bazel/"): return RUNNER
     if rel.startswith("packages/"): return ROOT / "trees" / engine
     return ROOT
+def role_for(rel, engine):
+    base = base_for(rel, engine)
+    return "runner-temp" if base == RUNNER else "engine-tree" if base == ROOT / "trees" / engine else "apk-timing"
 
 def tracked_paths():
     global TRACKED, TRACKED_PARENTS
@@ -69,10 +72,17 @@ def digest(path):
 
 def inside(path, base): return os.path.commonpath((str(path), str(base))) == str(base)
 
-def walk(top):
+def walk(top, base):
     todo = [top]
     while todo:
-        path = todo.pop(); yield path
+        path = todo.pop()
+        if path.name in ("docs", "src") and top == base / "home/.gradle":
+            parts = path.relative_to(top).parts
+            # Only the wrapper binaries are needed; the all distribution includes docs and sources.
+            if (len(parts) == 6 and parts[:2] == ("wrapper", "dists")
+                    and parts[2].startswith("gradle-") and parts[4].startswith("gradle-")):
+                continue
+        yield path
         if path.name == "init.d": continue
         if stat.S_ISDIR(path.lstat().st_mode): todo.extend(sorted(path.iterdir(), reverse=True))
 
@@ -129,12 +139,12 @@ def pack_archive(engine, root_specs, archive, archive_limit):
             for rel, label, required in root_specs:
                 base = base_for(rel, engine); top = base / rel; present = os.path.lexists(top)
                 if required and not present: raise CacheError("required root missing: " + rel)
-                role = "runner-temp" if base == RUNNER else "engine-tree" if base == ROOT / "trees" / engine else "apk-timing"
-                root = {"path": rel, "name": label, "base": role, "required": required, "present": present, "entries": 0}
+                role = role_for(rel, engine)
+                root = {"path": rel, "name": label, "base": role, "required": required, "present": present, "entries": 0, "raw_bytes": 0}
                 rootmeta.append(root)
                 if not present: continue
                 realbase = Path(os.path.realpath(base))
-                for path in walk(top):
+                for path in walk(top, base):
                     name = path.relative_to(base).as_posix()
                     if role == "engine-tree" and name in tracked:
                         root.setdefault("excluded_tracked", []).append(name)
@@ -154,12 +164,13 @@ def pack_archive(engine, root_specs, archive, archive_limit):
                     elif info.isreg() or info.islnk():
                         if info.islnk(): info.type, info.linkname, info.size = tarfile.REGTYPE, "", path.lstat().st_size
                         with path.open("rb") as f: tar.addfile(info, GuardedReader(guarded(f, secrets, path)))
-                        raw += info.size
+                        raw += info.size; root["raw_bytes"] += info.size
                     elif info.isdir(): tar.addfile(info)
                     else: raise CacheError("unsupported source file type: " + name)
                     count += 1; root["entries"] += 1
                     if os.path.lexists(archive) and archive.stat().st_size > archive_limit:
-                        raise CacheError("compressed cache archive exceeds bounded upload limit")
+                        sizes = ", ".join(f"{r['name']}={r['raw_bytes']}B/{r['entries']} entries" for r in rootmeta)
+                        raise CacheError(f"compressed cache archive exceeds bounded upload limit ({archive.stat().st_size}>{archive_limit} bytes; roots: {sizes})")
     except Exception:
         try: proc.stdin.close()
         except BrokenPipeError: pass
@@ -183,7 +194,9 @@ def pack(engine, scenario, op):
             "ancestor_identity": ancestor_identity(engine), "archive_bytes": component["archive_bytes"],
             "components": [component]}
     encoded = json.dumps(meta, sort_keys=True, indent=2) + "\n"; manifest_bytes = len(encoded.encode()); total = component["archive_bytes"] + manifest_bytes
-    if total > cap - HEADROOM: raise CacheError(f"snapshot {total} exceeds cap less headroom {cap - HEADROOM}")
+    if total > cap - HEADROOM:
+        sizes = ", ".join(f"{r['name']}={r['raw_bytes']}B/{r['entries']} entries" for r in component["roots"])
+        raise CacheError(f"snapshot {total} exceeds cap less headroom {cap - HEADROOM} ({component['archive_bytes']} archive + {manifest_bytes} manifest; roots: {sizes})")
     (TRANSPORT / "manifest.json").write_text(encoded)
     op.update(status="ok", key=cachekey, cap_bytes=cap, headroom_bytes=HEADROOM, archive_bytes=component["archive_bytes"], manifest_bytes=manifest_bytes, manifest_sha256=hashlib.sha256(encoded.encode()).hexdigest(), combined_bytes=total, ancestor_identity=meta["ancestor_identity"], components=[component])
     excluded = [path for root in component["roots"] for path in root.get("excluded_tracked", [])]
@@ -291,17 +304,26 @@ def restore(engine, scenario, op):
     requested=key(engine,scenario)
     if scenario=="cold": op.update(status="skipped",reason="cold starts from prepared tracked checkout"); outputs(False,TRANSPORT,requested); return
     _,roots=specs(engine,"cold"); raw=(TRANSPORT/"manifest.json").read_bytes(); meta=json.loads(raw)
-    diff=[k for k,v in identity(engine,"cold").items() if meta.get(k)!=v]
+    expected_identity=identity(engine,"cold")
+    diff=[k for k,v in expected_identity.items() if meta.get(k)!=v]
     if diff: raise CacheError("snapshot identity mismatch: "+", ".join(diff))
     cap=CAPS[f"{engine}-cold"]
     if meta.get("cap_bytes")!=cap or meta.get("headroom_bytes")!=HEADROOM: raise CacheError("cap/headroom mismatch")
-    if meta.get("ancestor_identity")!=ancestor_identity(engine): raise CacheError("ancestor identity mismatch")
+    expected_ancestor=ancestor_identity(engine)
+    if meta.get("ancestor_identity")!=expected_ancestor: raise CacheError("ancestor identity mismatch")
     comps=meta.get("components")
     if not isinstance(comps,list) or len(comps)!=1: raise CacheError("invalid component list")
     c=comps[0]; expected=[r for r,_,_ in roots]
-    if c.get("name")!=f"{engine}-cold" or [r.get("path") for r in c.get("roots",[]) ]!=expected: raise CacheError("root layout mismatch")
+    if (set(meta)!={"schema","engine","scenario","head","run_id","run_attempt","ancestor","kind","cap_bytes","headroom_bytes","ancestor_identity","archive_bytes","components"}
+            or meta.get("kind")!="cold" or c.get("name")!=f"{engine}-cold"
+            or set(c)!={"name","file","base","roots","archive_bytes","archive_sha256","raw_bytes","entries"}
+            or c.get("base")!="tree" or [r.get("path") for r in c.get("roots",[]) ]!=expected):
+        raise CacheError("snapshot manifest layout mismatch")
+    if [(r.get("path"),r.get("name"),r.get("base"),r.get("required")) for r in c["roots"]] != [
+            (rel,label,role_for(rel,engine),required) for rel,label,required in roots]:
+        raise CacheError("snapshot root roles mismatch")
     filename=c.get("file","")
-    if Path(filename).name!=filename: raise CacheError("archive filename path traversal")
+    if filename!=f"{engine}-cold.tar.zst": raise CacheError("unexpected archive filename")
     archive=TRANSPORT/filename
     if not archive.is_file() or archive.stat().st_size!=c.get("archive_bytes") or digest(archive)!=c.get("archive_sha256"): raise CacheError("archive size or SHA mismatch")
     total=c["archive_bytes"]+len(raw)
@@ -316,7 +338,7 @@ def restore(engine, scenario, op):
             raise CacheError("destination ancestor escapes tree: "+rel)
     actual,actualraw=extract(engine,archive,allowed)
     if (actual,actualraw)!=(count,rawbytes): raise CacheError("extraction differs from preflight counts")
-    op.update(status="ok",key=key(engine,"cold"),cap_bytes=cap,headroom_bytes=HEADROOM,archive_bytes=c["archive_bytes"],manifest_bytes=len(raw),manifest_sha256=hashlib.sha256(raw).hexdigest(),combined_bytes=total,ancestor_identity=meta["ancestor_identity"],components=[{"file":filename,"archive_bytes":c["archive_bytes"],"archive_sha256":c["archive_sha256"],"entries":actual,"raw_bytes":actualraw}])
+    op.update(status="ok",key=key(engine,"cold"),cap_bytes=cap,headroom_bytes=HEADROOM,archive_bytes=c["archive_bytes"],manifest_bytes=len(raw),manifest_sha256=hashlib.sha256(raw).hexdigest(),combined_bytes=total,ancestor_identity=meta["ancestor_identity"],components=[{"file":filename,"archive_bytes":c["archive_bytes"],"archive_sha256":c["archive_sha256"],"entries":actual,"raw_bytes":actualraw,"roots":c["roots"]}])
 
 def main(argv=None):
     p=argparse.ArgumentParser(); p.add_argument("command",choices=("pack","restore")); p.add_argument("--engine",required=True,choices=("stock","bazel")); p.add_argument("--scenario",required=True,choices=("cold","warm","lib")); a=p.parse_args(argv)

@@ -32,9 +32,18 @@ SDK = Path(os.environ.get("RUNNER_TEMP", tempfile.gettempdir())) / "flutter"
 PUB = Path(os.environ.get("RUNNER_TEMP", tempfile.gettempdir())) / "cache-state" / "pub"
 BAZELISK = Path(os.environ.get("RUNNER_TEMP", tempfile.gettempdir())) / "cache-state" / "bazelisk"
 WORKLOAD_HEAD = "6e7408fda8e46bc97a0d8f2b33a801cf27c8dabe"
+FIRST_HARNESS_COMMIT = "b6c8f069fbb7c7a77551c42108dcc7dafef2eb5d"
+PILOT_HEAD = FIRST_HARNESS_COMMIT
 HARNESS_FILES = {
     ".github/workflows/ci-apk-timing.yml", "ci/apk/timing.py", "ci/apk/timing_cache.py",
 }
+PROFILE_PHASES = {
+    "Launch Blaze", "Initialize command", "Evaluate target patterns",
+    "Load and analyze dependencies", "Load, analyze dependencies and build artifacts",
+    "Analyze licenses", "Prepare for build", "Build artifacts", "Complete build",
+}
+REMOTE_PROFILE_CATEGORIES = {"remote action cache check", "remote network", "remote output download"}
+RESOURCE_SAMPLE_SECONDS = 1.0
 OLD_SHA = "35edd245bf824b5805d0453d0583d60c69b12a49a1468387217f5a902eb5bfd9"
 NEW_SHA = "5e0160f09b1bed2fab4dfa38d5e481f350e3f3024b49836e49ecbb6402825b61"
 LIB_REL = "packages/smooth_app/lib/helpers/string_extension.dart"
@@ -100,19 +109,60 @@ def phase(state, name):
     return measured()
 
 
-def command(state, name, argv, cwd, env, timeout=3600, *, output_limit=5000):
+def _system_memory_usage():
+    try:
+        values = {}
+        for line in Path("/proc/meminfo").read_text().splitlines():
+            key, value = line.split(":", 1)
+            if key in ("MemAvailable", "SwapTotal", "SwapFree"):
+                values[key] = int(value.split()[0]) * 1024
+        if not all(key in values for key in ("MemAvailable", "SwapTotal", "SwapFree")):
+            return None
+        return {
+            "mem_available_bytes": values["MemAvailable"],
+            "swap_used_bytes": max(0, values["SwapTotal"] - values["SwapFree"]),
+        }
+    except (OSError, ValueError, IndexError):
+        return None
+
+
+def command(state, name, argv, cwd, env, timeout=3600, *, output_limit=5000,
+            sample_resources=False):
     start_epoch, start_mono = time.time(), time.monotonic()
     safe_argv = [str(x) for x in argv]
+    stored_argv = [re.sub(r"^--profile=.*$", "--profile=[temporary]", arg) for arg in safe_argv]
     deadline = float(os.environ.get("APK_TIMING_DEADLINE_EPOCH", "0") or 0)
     if deadline:
         timeout = min(timeout, deadline - time.time())
         if timeout <= 0:
             raise RuntimeError("global APK timing deadline exhausted")
+    if name in ("stock-flutter-build-apk", "bazel-build-apk"):
+        print(f"APK_TIMING_HEARTBEAT build_started engine={state['identity']['engine']} scenario={state['identity']['scenario']}", flush=True)
     proc = subprocess.Popen(safe_argv, cwd=cwd, env=env, stdout=subprocess.PIPE,
                             stderr=subprocess.STDOUT, text=True, errors="replace",
                             start_new_session=True)
+    min_mem_available = None
+    peak_swap_used = None
+    next_sample = start_mono
     try:
-        text, _ = proc.communicate(timeout=timeout)
+        if sample_resources:
+            while True:
+                if time.monotonic() >= next_sample:
+                    observed = _system_memory_usage()
+                    if observed is not None:
+                        available, swap_used = observed["mem_available_bytes"], observed["swap_used_bytes"]
+                        min_mem_available = available if min_mem_available is None else min(min_mem_available, available)
+                        peak_swap_used = swap_used if peak_swap_used is None else max(peak_swap_used, swap_used)
+                    next_sample = time.monotonic() + RESOURCE_SAMPLE_SECONDS
+                remaining = timeout - (time.monotonic() - start_mono)
+                try:
+                    text, _ = proc.communicate(timeout=min(1.0, max(0.01, remaining)))
+                    break
+                except subprocess.TimeoutExpired:
+                    if remaining <= 0:
+                        raise
+        else:
+            text, _ = proc.communicate(timeout=timeout)
         rc = proc.returncode
         if rc:
             with contextlib.suppress(ProcessLookupError):
@@ -127,15 +177,28 @@ def command(state, name, argv, cwd, env, timeout=3600, *, output_limit=5000):
                 os.killpg(proc.pid, signal.SIGKILL)
             text, _ = proc.communicate()
         rc = 124
+    for arg in safe_argv:
+        if arg.startswith("--profile="):
+            text = text.replace(arg.split("=", 1)[1], "[temporary]")
     text = text or ""
     for key in ("BAZEL_CACHE_TOKEN_RW", "BAZEL_CACHE_HOST", "BAZEL_CACHE_PROJECT_ID"):
         secret = os.environ.get(key)
         if secret:
             text = text.replace(secret, "[REDACTED]")
     end_epoch = time.time()
-    row = {"name": name, "argv": safe_argv, "cwd": str(cwd), "start_epoch": start_epoch,
+    row = {"name": name, "argv": stored_argv, "cwd": str(cwd), "start_epoch": start_epoch,
            "end_epoch": end_epoch, "duration_seconds": round(time.monotonic() - start_mono, 6),
            "exit_code": rc, "output_tail": text[-output_limit:]}
+    if sample_resources:
+        memory = {
+            "status": "sampled" if min_mem_available is not None else "unavailable",
+            "sampling_interval_seconds": RESOURCE_SAMPLE_SECONDS,
+            "semantics": "host-wide sampled minimum MemAvailable and peak SwapTotal-SwapFree; unrelated processes included",
+        }
+        if min_mem_available is not None:
+            memory["minimum_mem_available_bytes"] = min_mem_available
+            memory["peak_swap_used_bytes"] = peak_swap_used
+        row["system_memory"] = memory
     state.setdefault("commands", []).append(row)
     save(state)
     if rc:
@@ -212,23 +275,29 @@ def dispatch_head():
     head = identity(WS)
     if head != os.environ.get("GITHUB_SHA"):
         raise RuntimeError("checkout HEAD does not match GITHUB_SHA")
-    parent = subprocess.check_output(["git", "rev-parse", "HEAD^"], cwd=WS, text=True).strip()
-    if parent != WORKLOAD_HEAD:
-        raise RuntimeError("dispatch commit is not based directly on the frozen workload")
-    changed = subprocess.check_output(
+    first_parent = subprocess.check_output(
+        ["git", "rev-parse", FIRST_HARNESS_COMMIT + "^"], cwd=WS, text=True
+    ).strip()
+    if first_parent != WORKLOAD_HEAD:
+        raise RuntimeError("first harness commit is not an exact child of the frozen workload")
+    changed = set(subprocess.check_output(
         ["git", "diff", "--name-only", WORKLOAD_HEAD, head], cwd=WS, text=True
-    )
-    if not set(changed.splitlines()) <= HARNESS_FILES:
-        raise RuntimeError("dispatch commit changes the frozen workload")
+    ).splitlines())
+    if changed != HARNESS_FILES:
+        raise RuntimeError("cumulative changed paths differ from the exact harness path table")
+    if head != PILOT_HEAD:
+        parent = subprocess.check_output(["git", "rev-parse", head + "^"], cwd=WS, text=True).strip()
+        if parent != FIRST_HARNESS_COMMIT:
+            raise RuntimeError("dispatch commit is not an exact child of the first harness commit")
     return head
 
 
-def tracked_tree(engine, head):
+def tracked_tree(engine):
     tree = ROOT / "trees" / engine
     if tree.exists():
         shutil.rmtree(tree)
     tree.mkdir(parents=True)
-    proc = subprocess.Popen(["git", "-C", str(WS), "archive", "--format=tar", head], stdout=subprocess.PIPE)
+    proc = subprocess.Popen(["git", "-C", str(WS), "archive", "--format=tar", WORKLOAD_HEAD], stdout=subprocess.PIPE)
     assert proc.stdout
     with tarfile.open(fileobj=proc.stdout, mode="r|") as archive:
         archive.extractall(tree, filter="data")
@@ -271,7 +340,7 @@ def cmd_prepare(args):
     ROOT.mkdir(parents=True, exist_ok=True)
     head = dispatch_head()
     manifest = verify_frozen()
-    tree = tracked_tree(args.engine, head)
+    tree = tracked_tree(args.engine)
     verify_frozen(tree)
     state = {"schema": 1, "kind": "smooth-current-debug-apk-timing", "status": "prepared",
              "identity": {"head": head, "run_id": os.environ.get("GITHUB_RUN_ID", ""),
@@ -285,7 +354,8 @@ def cmd_prepare(args):
                           "flutter": manifest["flutter"], "bazel": manifest["bazel"]},
              "runner": runner_metadata(),
              "build_config": {"target": APK_TARGET, "stock_target": ENTRYPOINT, "abi": "x86_64",
-                              "mode": "debug", "bazel_configuration": "fastbuild", "bazel_jobs": 2,
+                              "mode": "debug", "bazel_configuration": "fastbuild",
+                              "bazel_jobs": "default (4-vCPU runner)",
                               "compile_sdk": 36, "build_tools": "36.0.0", "ndk": "28.2.13676358",
                               "java": 17, "lockfile_mode": "error"},
              "phases": [], "commands": [], "errors": [],
@@ -363,7 +433,7 @@ def bazel_argv(root, command_name, env, *, bep=None, remote=True, extra=()):
         args.append("--remote_cache=")
     args += ["--repository_cache=" + str(ROOT / "repository-cache"),
              "--repo_env=FLUTTER_ROOT=" + str(SDK), "--repo_env=ANDROID_HOME=" + env["ANDROID_HOME"],
-             "--repo_env=ANDROID_NDK_HOME=" + env["ANDROID_NDK_HOME"], "--jobs=2",
+             "--repo_env=ANDROID_NDK_HOME=" + env["ANDROID_NDK_HOME"],
              "--android_platforms=@rules_android//:x86_64", "--@rules_flutter_core//flutter:mode=debug",
              "-c", "fastbuild", "--merge_android_manifest_permissions", "--tool_java_language_version=17",
              "--tool_java_runtime_version=remotejdk_17", "--java_language_version=17",
@@ -488,15 +558,88 @@ def ensure_sdk_tools(state, env):
         raise RuntimeError("flutter_tools locked preparation did not preserve lock/write package config")
 
 
+def collect_profile(path):
+    try:
+        if not path.is_file():
+            return {"status": "missing"}
+        try:
+            document = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+            return {"status": "invalid"}
+        events = document.get("traceEvents") if isinstance(document, dict) else None
+        if not isinstance(events, list):
+            return {"status": "invalid"}
+        phase_spans, action_spans, mnemonics = {}, [], {}
+        remote_categories = {key: {"event_count": 0, "max_event_span_seconds": 0.0}
+                             for key in sorted(REMOTE_PROFILE_CATEGORIES)}
+        action_duration = 0.0
+        action_count = 0
+        for event in events:
+            if not isinstance(event, dict) or event.get("ph") != "X":
+                continue
+            ts, duration = event.get("ts"), event.get("dur")
+            if (not isinstance(ts, (int, float)) or isinstance(ts, bool)
+                    or not isinstance(duration, (int, float)) or isinstance(duration, bool) or duration < 0):
+                continue
+            category, name = event.get("cat"), event.get("name")
+            span = float(duration) / 1_000_000
+            if category == "build phase marker" and name in PROFILE_PHASES:
+                phase_spans[name] = max(phase_spans.get(name, 0.0), span)
+            if category in remote_categories:
+                remote_categories[category]["event_count"] += 1
+                remote_categories[category]["max_event_span_seconds"] = max(
+                    remote_categories[category]["max_event_span_seconds"], span)
+            if category != "action processing":
+                continue
+            args = event.get("args") if isinstance(event.get("args"), dict) else {}
+            action_count += 1
+            action_duration += float(duration)
+            action_spans.extend(((float(ts), 1), (float(ts + duration), -1)))
+            mnemonic = args.get("mnemonic")
+            if isinstance(mnemonic, str) and re.fullmatch(r"[A-Za-z0-9_]{1,80}", mnemonic):
+                mnemonics[mnemonic] = mnemonics.get(mnemonic, 0) + 1
+        concurrent = peak_concurrent = 0
+        for _, change in sorted(action_spans, key=lambda item: (item[0], item[1])):
+            concurrent += change
+            peak_concurrent = max(peak_concurrent, concurrent)
+        return {
+            "status": "available",
+            "schema": "Bazel 9.2 traceEvents: ph=X; build phase marker, action processing, remote profiler categories",
+            "build_phase_marker_max_span_seconds": {key: round(value, 6) for key, value in sorted(phase_spans.items())},
+            "action_event_count": action_count,
+            "action_concurrency_peak": peak_concurrent,
+            "action_duration_sum_seconds": round(action_duration / 1_000_000, 6),
+            "action_duration_semantics": "sum of action processing spans; overlaps and is not wall time",
+            "action_mnemonic_counts": dict(sorted(mnemonics.items())),
+            "remote_category_events": {
+                key: {"event_count": value["event_count"],
+                      "max_event_span_seconds": round(value["max_event_span_seconds"], 6)}
+                for key, value in remote_categories.items()
+            },
+            "remote_category_semantics": "exact ProfilerTask category counts/spans; remote network is not upload-only",
+        }
+    finally:
+        with contextlib.suppress(OSError):
+            path.unlink(missing_ok=True)
+
+def final_critical_path(build_log):
+    matches = re.findall(
+        r"(?m)^INFO: Elapsed time: [0-9]+(?:\.[0-9]+)?s, Critical Path: ([0-9]+(?:\.[0-9]+)?)s(?:,.*)?$",
+        build_log,
+    )
+    if not matches:
+        return {"status": "unavailable"}
+    return {"status": "available", "seconds": float(matches[-1]), "source": "final Bazel INFO summary"}
+
 def collect_bep(path, build_log):
     counts = {"events": 0, "actions_completed": 0, "actions_failed": 0, "mnemonics": {}}
     summary = re.findall(r"(?m)^INFO: (\d+) process(?:es)?: ([^\r\n]+)", build_log)
     if summary:
         total, breakdown = summary[-1]
         hits = re.search(r"\b(\d+) remote cache hits?\b", breakdown)
-        counts["process_summary"] = {
-            "total": int(total), "remote_cache_hits": int(hits[1]) if hits else 0, "raw": breakdown,
-        }
+        counts["process_summary"] = {"total": int(total)}
+        if hits:
+            counts["process_summary"]["remote_cache_hits"] = int(hits[1])
     try:
         with path.open(encoding="utf-8", errors="replace") as stream:
             for line in stream:
@@ -545,7 +688,8 @@ def cmd_run(args):
     verify_frozen(tree)
     _ACTIVE_STATE = state
     env = _ENV = job_env(args.engine, state)
-    source_baseline = None
+    profile_path = None
+    build_log = None
     if args.scenario == "lib":
         source_baseline = (tree / LIB_REL).read_bytes()
         mutation = apply_library_edit(tree / LIB_REL)
@@ -567,12 +711,19 @@ def cmd_run(args):
             with phase(state, "stock-debug-apk-build"):
                 command(state, "stock-flutter-build-apk", [SDK / "bin/flutter", "build", "apk", "--debug",
                         "--target-platform", "android-x64", "--target", ENTRYPOINT, "--no-pub"],
-                        tree / "packages/smooth_app", env, timeout=3300)
+                        tree / "packages/smooth_app", env, timeout=3300, sample_resources=True)
         else:
             bep = ROOT / "logs" / "bep.json"
+            profile_path = ROOT / "logs" / "bazel-profile.json"
             bep.unlink(missing_ok=True)
+            profile_path.unlink(missing_ok=True)
             with phase(state, "bazel-debug-apk-build"):
-                build_log = command(state, "bazel-build-apk", bazel_argv(tree, "build", env, bep=bep), tree, env, timeout=3300)
+                build_log = command(
+                    state, "bazel-build-apk",
+                    bazel_argv(tree, "build", env, bep=bep,
+                               extra=("--profile=" + str(profile_path), "--worker_quit_after_build")),
+                    tree, env, timeout=3300, sample_resources=True,
+                )
             if not bep.is_file():
                 raise RuntimeError("Bazel did not produce required build event stream")
             query = command(state, "bazel-apk-output", bazel_argv(tree, "cquery", env, extra=("--output=files",)), tree, env, timeout=300)
@@ -586,10 +737,20 @@ def cmd_run(args):
         state["required_result_epoch"] = time.time()
         state["required_result_duration_seconds"] = round(state["required_result_epoch"] - required_start, 6)
         if args.engine == "bazel":
+            state["bazel_profile"] = collect_profile(profile_path)
+            state["bazel_profile"]["raw_trace_cleanup"] = "removed" if not profile_path.exists() else "failed"
+            state["bazel_critical_path"] = final_critical_path(build_log)
+            save(state)
+            if state["bazel_profile"]["raw_trace_cleanup"] != "removed":
+                raise RuntimeError("temporary Bazel profile cleanup failed")
             with phase(state, "bep-metrics-post-result"):
                 state["bep_metrics"] = collect_bep(bep, build_log)
         state["status"] = "passed"
     except BaseException as exc:
+        if args.engine == "bazel" and profile_path is not None:
+            state["bazel_profile"] = collect_profile(profile_path)
+            state["bazel_profile"]["raw_trace_cleanup"] = "removed" if not profile_path.exists() else "failed"
+            state["bazel_critical_path"] = final_critical_path(build_log) if build_log is not None else {"status": "unavailable"}
         state["status"] = "failed"
         state["failure"] = {"type": type(exc).__name__, "message": str(exc)[:1500]}
         state.setdefault("errors", []).append(state["failure"])

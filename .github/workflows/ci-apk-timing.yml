@@ -21,18 +21,13 @@ env:
   FLUTTER_SUPPRESS_ANALYTICS: 'true'
 
 jobs:
-  cold:
-    name: ${{ matrix.engine }} / cold
+  stock-cold:
+    name: stock / cold
     if: github.repository == 'Sameri11/smooth-app'
     runs-on: ubuntu-24.04
     timeout-minutes: 60
-    strategy:
-      fail-fast: false
-      max-parallel: 2
-      matrix:
-        engine: [stock, bazel]
     env:
-      ENGINE: ${{ matrix.engine }}
+      ENGINE: stock
       SCENARIO: cold
     steps: &workload
       - name: Start required-result clock and isolate state
@@ -60,7 +55,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
-          fetch-depth: 2
+          fetch-depth: 3
       - name: Check out frozen rules
         if: env.ENGINE == 'bazel'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -155,7 +150,8 @@ jobs:
           BAZEL_CACHE_PROJECT_ID: ${{ secrets.BAZEL_CACHE_PROJECT_ID }}
           BAZEL_CACHE_TOKEN_RW: ${{ secrets.BAZEL_CACHE_TOKEN_RW }}
         run: |
-          trap 'rm -f "$RUNNER_TEMP/apk-timing/remote-cache.bazelrc" "$RUNNER_TEMP/apk-timing/logs/bep.json"' EXIT
+          root="$RUNNER_TEMP/apk-timing"
+          trap 'rm -f "$root/remote-cache.bazelrc" "$root/logs/bep.json" "$root/logs/bazel-profile.json"' EXIT
           python3 ci/apk/timing.py run --engine "$ENGINE" --scenario "$SCENARIO"
       - name: Pack bounded cache publication
         id: pack
@@ -210,6 +206,17 @@ jobs:
           d['cache_upload_end_epoch'] = time.time(); d['published_cache'] = rows[0]
           p.write_text(json.dumps(d))
           PY
+      - name: Shut down isolated Bazel server
+        if: always() && env.ENGINE == 'bazel'
+        shell: bash
+        run: |
+          root="$RUNNER_TEMP/apk-timing"
+          base="$root/bazel-output-base"
+          if [[ -x "$RUNNER_TEMP/bazel" && -d "$base/server" ]]; then
+            cd "$root/trees/bazel"
+            HOME="$root/home" timeout 30 "$RUNNER_TEMP/bazel" --nosystem_rc --nohome_rc --noworkspace_rc \
+              --output_base="$base" shutdown
+          fi
       - name: Emit compact evidence without artifacts
         if: always()
         shell: bash
@@ -223,34 +230,52 @@ jobs:
           APK_TIMING_JOB_STATUS: ${{ job.status }}
         run: python3 ci/apk/timing.py verify --engine "$ENGINE" --scenario "$SCENARIO"
 
-  warm:
-    name: ${{ matrix.engine }} / warm
-    if: github.repository == 'Sameri11/smooth-app'
-    needs: cold
+  stock-warm:
+    name: stock / warm
+    needs: stock-cold
     runs-on: ubuntu-24.04
     timeout-minutes: 60
-    strategy:
-      fail-fast: false
-      max-parallel: 2
-      matrix:
-        engine: [stock, bazel]
     env:
-      ENGINE: ${{ matrix.engine }}
+      ENGINE: stock
       SCENARIO: warm
     steps: *workload
 
-  lib:
-    name: ${{ matrix.engine }} / lib
-    if: github.repository == 'Sameri11/smooth-app'
-    needs: warm
+  stock-lib:
+    name: stock / lib
+    needs: stock-warm
     runs-on: ubuntu-24.04
     timeout-minutes: 60
-    strategy:
-      fail-fast: false
-      max-parallel: 2
-      matrix:
-        engine: [stock, bazel]
     env:
-      ENGINE: ${{ matrix.engine }}
+      ENGINE: stock
+      SCENARIO: lib
+    steps: *workload
+
+  bazel-cold:
+    name: bazel / cold
+    if: github.repository == 'Sameri11/smooth-app'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      ENGINE: bazel
+      SCENARIO: cold
+    steps: *workload
+
+  bazel-warm:
+    name: bazel / warm
+    needs: bazel-cold
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      ENGINE: bazel
+      SCENARIO: warm
+    steps: *workload
+
+  bazel-lib:
+    name: bazel / lib
+    needs: bazel-warm
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      ENGINE: bazel
       SCENARIO: lib
     steps: *workload
