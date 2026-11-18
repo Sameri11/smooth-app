@@ -55,15 +55,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
-          fetch-depth: 3
-      - name: Check out frozen rules
-        if: env.ENGINE == 'bazel'
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-        with:
-          repository: Sameri11/rules_flutter
-          ref: 6ab5ab906916abfdbd80d8a843bee87df500766d
-          path: .ci-rules
-          persist-credentials: false
+          fetch-depth: 4
       - name: Prepare isolated tracked source
         shell: bash
         run: python3 ci/apk/timing.py prepare --engine "$ENGINE" --scenario "$SCENARIO"
@@ -106,23 +98,17 @@ jobs:
           PY
           python3 ci/apk/timing_cache.py restore --engine "$ENGINE" --scenario "$SCENARIO"
           rm -rf "$RUNNER_TEMP/apk-timing-cache"
-      - name: Install verified Flutter and Bazelisk
+      - name: Install verified Flutter
         if: env.SCENARIO == 'cold'
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p "$PUB_CACHE" "$BAZELISK_HOME"
+          mkdir -p "$PUB_CACHE"
           curl --fail --location --retry 2 --output "$RUNNER_TEMP/flutter.tar.xz" \
             https://storage.googleapis.com/flutter_infra_release/releases/stable/linux/flutter_linux_3.41.8-stable.tar.xz
           echo "0c7e47fc39ef86290b41707d687bdca7f82b277267a6ef74717f8e88ac423de1  $RUNNER_TEMP/flutter.tar.xz" | sha256sum --check
           tar -xJf "$RUNNER_TEMP/flutter.tar.xz" -C "$RUNNER_TEMP"
           rm "$RUNNER_TEMP/flutter.tar.xz"
-          if [ "$ENGINE" = bazel ]; then
-            curl --fail --location --retry 2 --output "$RUNNER_TEMP/bazel" \
-              https://github.com/bazelbuild/bazelisk/releases/download/v1.29.0/bazelisk-linux-amd64
-            echo "5a408715e932c0250d28bd84555f12edbf70117de42f9181691c736eacc4a992  $RUNNER_TEMP/bazel" | sha256sum --check
-            chmod +x "$RUNNER_TEMP/bazel"
-          fi
       - name: Verify tools and install pinned Android dependencies
         shell: bash
         run: |
@@ -145,19 +131,10 @@ jobs:
           df -Pk "$RUNNER_TEMP"
       - name: Build and validate current APK
         shell: bash
-        env:
-          BAZEL_CACHE_HOST: ${{ secrets.BAZEL_CACHE_HOST }}
-          BAZEL_CACHE_PROJECT_ID: ${{ secrets.BAZEL_CACHE_PROJECT_ID }}
-          BAZEL_CACHE_TOKEN_RW: ${{ secrets.BAZEL_CACHE_TOKEN_RW }}
-        run: |
-          root="$RUNNER_TEMP/apk-timing"
-          trap 'rm -f "$root/remote-cache.bazelrc" "$root/logs/bep.json" "$root/logs/bazel-profile.json"' EXIT
-          python3 ci/apk/timing.py run --engine "$ENGINE" --scenario "$SCENARIO"
+        run: python3 ci/apk/timing.py run --engine "$ENGINE" --scenario "$SCENARIO"
       - name: Pack bounded cache publication
         id: pack
         shell: bash
-        env:
-          BAZEL_CACHE_TOKEN_RW: ${{ secrets.BAZEL_CACHE_TOKEN_RW }}
         run: python3 ci/apk/timing_cache.py pack --engine "$ENGINE" --scenario "$SCENARIO"
       - name: Guard included cache capacity
         if: steps.pack.outputs.upload == 'true'
@@ -206,17 +183,6 @@ jobs:
           d['cache_upload_end_epoch'] = time.time(); d['published_cache'] = rows[0]
           p.write_text(json.dumps(d))
           PY
-      - name: Shut down isolated Bazel server
-        if: always() && env.ENGINE == 'bazel'
-        shell: bash
-        run: |
-          root="$RUNNER_TEMP/apk-timing"
-          base="$root/bazel-output-base"
-          if [[ -x "$RUNNER_TEMP/bazel" && -d "$base/server" ]]; then
-            cd "$root/trees/bazel"
-            HOME="$root/home" timeout 30 "$RUNNER_TEMP/bazel" --nosystem_rc --nohome_rc --noworkspace_rc \
-              --output_base="$base" shutdown
-          fi
       - name: Emit compact evidence without artifacts
         if: always()
         shell: bash
@@ -247,35 +213,5 @@ jobs:
     timeout-minutes: 60
     env:
       ENGINE: stock
-      SCENARIO: lib
-    steps: *workload
-
-  bazel-cold:
-    name: bazel / cold
-    if: github.repository == 'Sameri11/smooth-app'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 60
-    env:
-      ENGINE: bazel
-      SCENARIO: cold
-    steps: *workload
-
-  bazel-warm:
-    name: bazel / warm
-    needs: bazel-cold
-    runs-on: ubuntu-24.04
-    timeout-minutes: 60
-    env:
-      ENGINE: bazel
-      SCENARIO: warm
-    steps: *workload
-
-  bazel-lib:
-    name: bazel / lib
-    needs: bazel-warm
-    runs-on: ubuntu-24.04
-    timeout-minutes: 60
-    env:
-      ENGINE: bazel
       SCENARIO: lib
     steps: *workload

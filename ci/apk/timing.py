@@ -32,8 +32,7 @@ SDK = Path(os.environ.get("RUNNER_TEMP", tempfile.gettempdir())) / "flutter"
 PUB = Path(os.environ.get("RUNNER_TEMP", tempfile.gettempdir())) / "cache-state" / "pub"
 BAZELISK = Path(os.environ.get("RUNNER_TEMP", tempfile.gettempdir())) / "cache-state" / "bazelisk"
 WORKLOAD_HEAD = "6e7408fda8e46bc97a0d8f2b33a801cf27c8dabe"
-FIRST_HARNESS_COMMIT = "b6c8f069fbb7c7a77551c42108dcc7dafef2eb5d"
-PILOT_HEAD = FIRST_HARNESS_COMMIT
+PREVIOUS_HARNESS_HEAD = "d0273fdbb9a49ac7b814c0fa3e115570446d87bf"
 HARNESS_FILES = {
     ".github/workflows/ci-apk-timing.yml", "ci/apk/timing.py", "ci/apk/timing_cache.py",
 }
@@ -275,20 +274,14 @@ def dispatch_head():
     head = identity(WS)
     if head != os.environ.get("GITHUB_SHA"):
         raise RuntimeError("checkout HEAD does not match GITHUB_SHA")
-    first_parent = subprocess.check_output(
-        ["git", "rev-parse", FIRST_HARNESS_COMMIT + "^"], cwd=WS, text=True
-    ).strip()
-    if first_parent != WORKLOAD_HEAD:
-        raise RuntimeError("first harness commit is not an exact child of the frozen workload")
+    parent = subprocess.check_output(["git", "rev-parse", head + "^"], cwd=WS, text=True).strip()
+    if parent != PREVIOUS_HARNESS_HEAD:
+        raise RuntimeError("dispatch commit is not an exact child of the previous harness")
     changed = set(subprocess.check_output(
         ["git", "diff", "--name-only", WORKLOAD_HEAD, head], cwd=WS, text=True
     ).splitlines())
     if changed != HARNESS_FILES:
         raise RuntimeError("cumulative changed paths differ from the exact harness path table")
-    if head != PILOT_HEAD:
-        parent = subprocess.check_output(["git", "rev-parse", head + "^"], cwd=WS, text=True).strip()
-        if parent != FIRST_HARNESS_COMMIT:
-            raise RuntimeError("dispatch commit is not an exact child of the first harness commit")
     return head
 
 

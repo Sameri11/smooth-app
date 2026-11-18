@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Bounded, identity-checked cache snapshots for the APK timing experiment."""
-import argparse, hashlib, json, os, shutil, stat, subprocess, sys, tarfile, time
+import argparse, hashlib, io, json, os, shutil, stat, subprocess, sys, tarfile, time
 from pathlib import Path, PurePosixPath
 
 RUNNER = Path(os.environ.get("RUNNER_TEMP", "."))
@@ -19,6 +19,21 @@ def credential_name(name):
         low.startswith(p + suffix) for p in PACKAGES
         for suffix in ("/.dart_tool/", "/build/", "/android/.gradle/", "/android/.cxx/", "/android/app/.cxx/"))
     return disposable and low.endswith((".pem", ".p12", ".pfx", ".keystore"))
+STOCK_CERT_SUFFIX = "/flutter_assets/assets/network/cert.pem"
+STOCK_CERT_SIZE = 1911
+STOCK_CERT_SHA256 = "c3c223f90ef6aabca1ed992400b9749d4a9b0cf7b5b47c38f55486b6ac53a40e"
+
+def stock_cert_name(name):
+    prefix = "packages/smooth_app/"
+    if not name.startswith(prefix) or not name.endswith(STOCK_CERT_SUFFIX): return False
+    middle = name[len(prefix):-len(STOCK_CERT_SUFFIX)]
+    return middle == "build" or middle.startswith(("build/", ".dart_tool/")) or middle == ".dart_tool"
+
+def checked_stock_cert(stream, member):
+    data = stream.read(STOCK_CERT_SIZE + 1)
+    if len(data) != STOCK_CERT_SIZE or hashlib.sha256(data).hexdigest() != STOCK_CERT_SHA256:
+        raise CacheError("unexpected generated stock Flutter certificate bytes: " + member.name)
+    return data
 TRACKED = None
 TRACKED_PARENTS = None
 class CacheError(Exception):
@@ -150,11 +165,20 @@ def pack_archive(engine, root_specs, archive, archive_limit):
                         root.setdefault("excluded_tracked", []).append(name)
                         continue
                     if path.name == "init.d" and path.is_dir() and not path.is_symlink(): continue
-                    if credential_name(name):
+                    cert = stock_cert_name(name)
+                    if credential_name(name) and not cert:
                         raise CacheError("credential-like cache file: " + name)
                     info = tar.gettarinfo(str(path), arcname=name)
-                    info.uid = info.gid = 0; info.uname = info.gname = ""
-                    if info.issym():
+                    if cert:
+                        if not info.isreg() or info.size != STOCK_CERT_SIZE:
+                            raise CacheError("unexpected generated stock Flutter certificate type or size: " + name)
+                        with path.open("rb") as f:
+                            data = checked_stock_cert(f, info)
+                        if any(secret in data for secret in secrets):
+                            raise CacheError("credential value found in " + name)
+                        tar.addfile(info, io.BytesIO(data))
+                        raw += info.size; root["raw_bytes"] += info.size
+                    elif info.issym():
                         target = Path(os.path.realpath(path))
                         if not inside(target, realbase):
                             raise CacheError("escaping source symlink: " + name)
@@ -228,7 +252,11 @@ def inspect(engine, archive, roots):
                     raise CacheError("archive would overwrite tracked checkout content: " + name)
                 if in_tree and name in TRACKED_PARENTS and not m.isdir():
                     raise CacheError("archive would replace tracked directory ancestor: " + name)
-                if credential_name(name): raise CacheError("credential-like archive member: " + name)
+                cert = stock_cert_name(name)
+                if credential_name(name) and not cert:
+                    raise CacheError("credential-like archive member: " + name)
+                if cert and (not m.isreg() or m.size != STOCK_CERT_SIZE):
+                    raise CacheError("unexpected generated stock Flutter certificate type or size: " + name)
                 if name in seen: raise CacheError("duplicate archive entry: "+name)
                 parts = name.split("/")
                 parents = ["/".join(parts[:i]) for i in range(1, len(parts))]
@@ -241,9 +269,12 @@ def inspect(engine, archive, roots):
                 seen_parents.update(parents)
                 if m.isdir(): pass
                 elif m.isreg():
-                    f=tar.extractfile(m)
-                    for _ in iter(lambda:f.read(1 << 20),b""): pass
-                    raw+=m.size
+                    f = tar.extractfile(m)
+                    if cert:
+                        checked_stock_cert(f, m)
+                    else:
+                        for _ in iter(lambda: f.read(1 << 20), b""): pass
+                    raw += m.size
                 elif m.issym():
                     if not inside(Path(os.path.realpath(destination(engine, name).parent / m.linkname)),
                                   Path(os.path.realpath(destination_base(engine, name)))):
