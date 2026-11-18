@@ -3,7 +3,7 @@
 
 Subcommands, in workflow order:
   build    stock and Bazel x86_64 debug APKs from isolated source trees, plus inventories.
-           Exits 0 once the driver ran; per-arm validity is recorded in state.
+           Exits 0 only when at least one arm is contract-valid; otherwise exits 1.
   runtime  every contract-valid arm on the emulator (apk_runtime.py), deadline-bound.
   emit     always: logs-only gzip+base64 evidence envelope. Never raises.
   verdict  always, after emit: machine gates. Manual visual review stays pending.
@@ -318,6 +318,7 @@ def run(label, argv, cwd, timeout, record=True):
     limit = clamp(timeout)
     started = time.time()
     rc, out, err = 127, "", ""
+    log(f"command_start label={label} timeout_seconds={limit:.1f}")
     try:
         proc = subprocess.run(
             [str(item) for item in argv],
@@ -348,6 +349,7 @@ def run(label, argv, cwd, timeout, record=True):
             entry["stderr_head"] = err[:16000]
     STATE["commands"].append(entry)
     save_state()
+    log(f"command_end label={label} rc={rc} seconds={entry['seconds']}")
     if rc != 0:
         raise StageError(f"{label} exited {rc}: {tail(err or out, 600)}")
     return out

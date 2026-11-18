@@ -95,6 +95,9 @@ jobs:
         shell: bash
         run: |
           export APK_STEP_DEADLINE_EPOCH=$(( $(date +%s) + 38*60 ))
+          vmstat -w 30 &
+          monitor_pid=$!
+          trap 'kill "$monitor_pid" 2>/dev/null || true; wait "$monitor_pid" 2>/dev/null || true' EXIT
           python3 ci/apk/economics.py build
       - name: Enable KVM
         shell: bash
