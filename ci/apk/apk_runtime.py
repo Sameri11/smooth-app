@@ -24,6 +24,7 @@ import urllib.request
 import uuid
 import xml.etree.ElementTree as ET
 import zipfile
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from pathlib import Path
 
 PACKAGE = "org.openfoodfacts.scanner"
@@ -32,6 +33,8 @@ PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
 PNG_MAX_BYTES = int(2.5 * 1024 * 1024)
 DIAG_TAIL = 4000
 STEP_TIMEOUT = 150
+# Monkey accepts the activity start before Android's asynchronous process fork completes.
+APP_START_TIMEOUT = 20
 FINAL_TIMEOUT = 150
 POLL_SECONDS = 2
 RESTORE_BUDGET = 60
@@ -355,37 +358,237 @@ def screenshot(adb, name, out):
     return rec
 
 
-def mapped_libraries(adb, package):
-    pid = adb.shell(f"pidof -s {package}", timeout=30, check=True).strip()
-    if not pid:
-        raise FlowError("app process not found by pidof")
-    maps = adb.shell(f"run-as {package} cat /proc/{pid}/maps", timeout=60, check=True)
-    libs = sorted(
-        {line.split()[-1].rsplit("/", 1)[-1] for line in maps.splitlines() if line.split() and line.split()[-1].endswith(".so")}
-    )
+PT_LOAD = 1
+PF_X = 1
+NATIVE_MAP_LINES = 24
+
+
+def _page_down(value, page):
+    return value - value % page
+
+
+def _page_up(value, page):
+    return -(-value // page) * page
+
+
+def _le(data, offset, size):
+    return int.from_bytes(data[offset : offset + size], "little")
+
+
+def _file_sha256(path):
+    digest = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for chunk in iter(lambda: fh.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _device_sha256(adb, path):
+    # Empty when the file is missing or unreadable; callers treat that as a mismatch.
+    if "'" in path:
+        raise FlowError(f"device path with a quote is not supported: {path}")
+    out = adb.shell(f"sha256sum '{path}'", timeout=120, check=False).split()
+    return out[0] if out else ""
+
+
+def maps_rows(text):
+    rows = []
+    for line in text.splitlines():
+        parts = line.split(None, 5)
+        if len(parts) < 5:
+            continue
+        start, end = (int(value, 16) for value in parts[0].split("-"))
+        rows.append(
+            {
+                "start": start,
+                "end": end,
+                "perms": parts[1],
+                "offset": int(parts[2], 16),
+                "path": parts[5].strip() if len(parts) == 6 else "",
+                "line": line,
+            }
+        )
+    return rows
+
+
+def elf_load_segments(data):
+    # (p_flags, p_offset, p_filesz) of each file-backed PT_LOAD of a little-endian ELF32/ELF64 image.
+    if data[:4] != b"\x7fELF" or data[4] not in (1, 2) or data[5] != 1:
+        raise FlowError("not a little-endian ELF32/ELF64 image")
+    wide = data[4] == 2
+    phoff = _le(data, 0x20 if wide else 0x1C, 8 if wide else 4)
+    entsize = _le(data, 0x36 if wide else 0x2A, 2)
+    count = _le(data, 0x38 if wide else 0x2C, 2)
+    if entsize < (56 if wide else 32) or phoff + entsize * count > len(data):
+        raise FlowError("program header table is outside the ELF image")
+    segments = []
+    for index in range(count):
+        at = phoff + index * entsize
+        if _le(data, at, 4) != PT_LOAD:
+            continue
+        if wide:
+            flags, offset, filesz = _le(data, at + 4, 4), _le(data, at + 8, 8), _le(data, at + 32, 8)
+        else:
+            offset, filesz, flags = _le(data, at + 4, 4), _le(data, at + 16, 4), _le(data, at + 24, 4)
+        if filesz:
+            segments.append((flags, offset, filesz))
+    if not segments:
+        raise FlowError("ELF image has no file-backed PT_LOAD segment")
+    return segments
+
+
+def _attributed(rows, path, base, size):
+    # Rows of `path` whose file offsets overlap [base, base + size).
+    return [
+        row
+        for row in rows
+        if row["path"] == path and row["offset"] < base + size and row["offset"] + row["end"] - row["start"] > base
+    ]
+
+
+def _covered(rows, lo, hi, perm):
+    spans = sorted((row["offset"], row["offset"] + row["end"] - row["start"]) for row in rows if perm in row["perms"])
+    reached = lo
+    for start, end in spans:
+        if start > reached:
+            break
+        reached = max(reached, end)
+    return reached >= hi
+
+
+def elf_mapping_proof(rows, path, data, base, page):
+    # Every file-backed PT_LOAD page range must be mapped readable from `path`, executable ones executable.
+    attributed = _attributed(rows, path, base, len(data))
+    if not attributed:
+        return False, "not mapped: no mapping of the file overlaps the library"
+    segments = elf_load_segments(data)
+    for flags, offset, filesz in segments:
+        if offset + filesz > len(data):
+            return False, f"PT_LOAD at {offset:#x} extends past the ELF image"
+        lo = _page_down(base + offset, page)
+        hi = _page_up(base + offset + filesz, page)
+        if not _covered(attributed, lo, hi, "r"):
+            return False, f"PT_LOAD at {offset:#x} is not mapped readable from the file"
+        if flags & PF_X and not _covered(attributed, lo, hi, "x"):
+            return False, f"executable PT_LOAD at {offset:#x} is not mapped executable"
+    return True, f"{len(segments)} PT_LOAD segments mapped from file offset {base:#x}"
+
+
+def _local_data_offset(fh, info):
+    # Data offset from the local header: its extra field can differ from the central directory's.
+    fh.seek(info.header_offset)
+    head = fh.read(30)
+    if len(head) != 30 or head[:4] != b"PK\x03\x04":
+        raise FlowError(f"{info.filename}: bad local file header")
+    name_len = int.from_bytes(head[26:28], "little")
+    extra_len = int.from_bytes(head[28:30], "little")
+    if fh.read(name_len) != info.orig_filename.encode("utf-8"):
+        raise FlowError(f"{info.filename}: local header name differs from the central directory")
+    return info.header_offset + 30 + name_len + extra_len
+
+
+def _native_proofs(rows, installed, apk, abi, page, device_sha256):
+    # Per device-ABI native library of `apk`: the proof of how the process maps it, or why none holds.
+    prefix = installed.rsplit("/", 1)[0] + "/lib/"
+    proofs = {}
+    with zipfile.ZipFile(apk) as zf, open(apk, "rb") as fh:
+        for info in zf.infolist():
+            parts = info.filename.split("/")
+            if len(parts) != 3 or parts[:2] != ["lib", abi] or not parts[2].endswith(".so"):
+                continue
+            name = parts[2]
+            data = zf.read(info)
+            tries = []  # (mode, ok, detail, attributed rows)
+            try:
+                if info.compress_type != zipfile.ZIP_STORED:
+                    tries.append(("apk", False, "not mapped from the APK: entry is compressed", []))
+                else:
+                    offset = _local_data_offset(fh, info)
+                    fh.seek(offset)
+                    if fh.read(len(data)) != data:
+                        raise FlowError(f"{name}: stored bytes at the data offset differ from the entry")
+                    if offset % page:
+                        tries.append(("apk", False, f"entry data at {offset:#x} is not page-aligned", []))
+                    else:
+                        ok, detail = elf_mapping_proof(rows, installed, data, offset, page)
+                        tries.append(("apk", ok, detail, _attributed(rows, installed, offset, len(data))))
+                extracted = {row["path"] for row in rows if row["path"].startswith(prefix) and row["path"].rsplit("/", 1)[-1] == name}
+                for path in sorted(extracted):
+                    if device_sha256(path) != _sha(data):
+                        tries.append(("extracted", False, f"{path}: sha256 differs from the APK entry", []))
+                        continue
+                    ok, detail = elf_mapping_proof(rows, path, data, 0, page)
+                    tries.append(("extracted", ok, detail, _attributed(rows, path, 0, len(data))))
+            except FlowError as exc:
+                tries.append(("elf", False, str(exc), []))
+            won = next((t for t in tries if t[1]), None)
+            if won:
+                proofs[name] = {"mode": won[0], "detail": won[2], "lines": [r["line"] for r in won[3][:NATIVE_MAP_LINES]]}
+            else:
+                shown = [r["line"] for t in tries for r in t[3]]
+                proofs[name] = {
+                    "mode": None,
+                    "detail": "; ".join(t[2] for t in tries) or "no mapping in the process",
+                    "lines": shown[:NATIVE_MAP_LINES],
+                }
+    return proofs
+
+
+def mapped_libraries(adb, package, apk, apk_sha, expected_pid):
+    # Native libraries of the supplied APK that the process has mapped from the bytes. The installed
+    # base APK must be that APK (sha256), and a library counts only when every PT_LOAD is mapped from it.
+    pid = app_pid(adb, package)
+    if pid != expected_pid:
+        raise FlowError(f"app process restarted: launched {expected_pid}, now {pid}")
+    listed = adb.shell(f"pm path {package}", timeout=60, check=True).splitlines()
+    installed_paths = [line.split(":", 1)[1].strip() for line in listed if line.startswith("package:")]
+    if len(installed_paths) != 1:
+        raise FlowError(f"{package} has {len(installed_paths)} installed APK paths; the proof covers one base APK")
+    installed = installed_paths[0]
+    installed_sha = _device_sha256(adb, installed)
+    if installed_sha != apk_sha:
+        raise FlowError(f"installed {installed} sha256 {installed_sha or 'unreadable'} != supplied {apk_sha}")
+    supplied = _file_sha256(apk)
+    if supplied != apk_sha:
+        raise FlowError(f"supplied APK sha256 {supplied} != contract record {apk_sha}")
+    abi = adb.shell("getprop ro.product.cpu.abi", timeout=30, check=True).strip()
+    page = int(adb.shell("getconf PAGE_SIZE", timeout=30, check=True).strip())
+    rows = maps_rows(adb.shell(f"run-as {package} cat /proc/{pid}/maps", timeout=60, check=True))
+    proofs = _native_proofs(rows, installed, apk, abi, page, lambda path: _device_sha256(adb, path))
+    loaded = sorted(name for name, proof in proofs.items() if proof["mode"])
+    observed = sorted({row["path"].rsplit("/", 1)[-1] for row in rows if row["path"].endswith(".so")})
     return {
         "pid": pid,
-        "libraries": libs,
-        "rive_native": "librive_native.so" in libs,
-        "flutter": "libflutter.so" in libs,
-        "sqlite": [lib for lib in libs if "sqlite" in lib.lower()],
+        "abi": abi,
+        "page_size": page,
+        "installed_apk": installed,
+        "installed_sha256": installed_sha,
+        "maps_rows": len(rows),
+        "libraries": loaded,
+        "modes": {name: proofs[name]["mode"] for name in loaded},
+        "unproven": {name: proof["detail"] for name, proof in proofs.items() if not proof["mode"]},
+        "map_lines": {name: proof["lines"] for name, proof in proofs.items() if proof["lines"]},
+        "rive_native": "librive_native.so" in loaded,
+        "flutter": "libflutter.so" in loaded,
+        # Observed .so basenames from any mapping (system libraries included); not an APK proof.
+        "sqlite": [lib for lib in observed if "sqlite" in lib.lower()],
     }
 
 
-def drive_onboarding(adb, result, out, package):
+def drive_onboarding(adb, result, out, package, apk, apk_sha):
     steps = result["flow"]["steps"]
     for name, present, absent, tap in ONBOARD:
         xml, nodes = wait_for(adb, name, present, absent, STEP_TIMEOUT)
         steps.append({"step": name, "xml_sha256": _sha(xml.encode("utf-8")), "nodes": len(nodes)})
         if name == "camera":
             result["screenshots"]["camera"] = screenshot(adb, "camera", out)
-            result["maps_camera"] = mapped_libraries(adb, package)
+            result["maps_camera"] = mapped_libraries(adb, package, apk, apk_sha, result["launch_pid"])
         tap_label(adb, nodes, tap)
     name, present, absent = FINAL_STATE
     xml, nodes = wait_for(adb, name, present, absent, FINAL_TIMEOUT)
     steps.append({"step": name, "xml_sha256": _sha(xml.encode("utf-8")), "nodes": len(nodes)})
     result["screenshots"]["final"] = screenshot(adb, "final", out)
-    result["maps_final"] = mapped_libraries(adb, package)
+    result["maps_final"] = mapped_libraries(adb, package, apk, apk_sha, result["launch_pid"])
 
 
 def install(adb, apk, package):
@@ -476,10 +679,49 @@ def launch(adb, package):
         raise FlowError(f"launch not confirmed: {_tail(out, 300)}")
 
 
-def logcat_gate(adb):
+# Threadtime rows: date time [uid] pid tid level tag: message.
+LOG_ROW_RE = re.compile(r"^\S+\s+\S+\s+(?:\S+\s+)?(\d+)\s+\d+\s+[VDIWEFAS]\s")
+
+
+def app_pid(adb, package, timeout=0):
+    deadline = time.time() + adb.budget.clamp(timeout) if timeout else None
+    while True:
+        now = time.time()
+        if deadline is not None and now >= deadline:
+            raise FlowError("app process not found by pidof before startup deadline")
+        limit = min(30, deadline - now) if deadline is not None else 30
+        rc, raw = adb.run(["shell", f"pidof {package}"], timeout=limit, check=False)
+        pids = _text(raw).split()
+        if rc not in (0, 1) or (rc != 0 and pids):
+            raise AdbError(f"pidof {package} exited {rc}: {_text(raw).strip()[:100]!r}")
+        if len(pids) > 1:
+            raise FlowError(f"pidof found several {package} processes: {' '.join(pids)[:100]}")
+        if rc == 0 and len(pids) == 1 and re.fullmatch(r"\d+", pids[0]):
+            return pids[0]
+        if pids:
+            raise AdbError(f"pidof {package} exited {rc}: {_text(raw).strip()[:100]!r}")
+        if deadline is None or time.time() >= deadline:
+            raise FlowError(f"app process not found by pidof (exit {rc})")
+        time.sleep(min(POLL_SECONDS, max(0, deadline - time.time())))
+
+
+def names_app_pid(line, pid):
+    row = LOG_ROW_RE.match(line)
+    if row and row.group(1) == pid:
+        return True
+    # A native crash is logged by the crash handler under its own pid and names the crashed pid in the message.
+    return re.search(rf"\bpid:?\s+{pid}\b", line, re.IGNORECASE) is not None
+
+
+def logcat_gate(adb, expected_pid, package=PACKAGE):
+    # Only the app process's fatal lines count. Other processes (Settings, system_server) log FATAL-like
+    # warnings in a normal run, so a whole-logcat match fails on them.
+    pid = app_pid(adb, package)
+    if pid != expected_pid:
+        raise FlowError(f"app process restarted: launched {expected_pid}, now {pid}")
     text = adb.shell("logcat -d", timeout=120, check=True, record=False)
-    matched = [line for line in text.splitlines() if FATAL_RE.search(line)]
-    return {"fatal_count": len(matched), "fatal_lines": matched, "tail": _tail(text)}
+    matched = [line for line in text.splitlines() if FATAL_RE.search(line) and names_app_pid(line, pid)]
+    return {"app_pid": pid, "fatal_count": len(matched), "fatal_lines": matched, "tail": _tail(text)}
 
 
 def db_check(adb, package, out):
@@ -547,6 +789,11 @@ def rpc(base, method, budget, **params):
 # Observed 5815 scripts for one Smooth isolate; the bound stops a runaway VM without cutting that.
 MAX_SCRIPTS = 8000
 MIN_SOURCE_BUDGET = 30
+# Parallel getObject calls per capture; the serial capture ran out of budget at 4773 of 5815 scripts.
+SOURCE_WORKERS = 4
+# Registrant source text is kept for classification; every other script keeps only its hash.
+SOURCE_EXAMPLE_RE = re.compile(r"(^|/)dart_plugin_registrant\.dart$")
+SOURCE_EXAMPLE_BYTES = 64 * 1024
 
 
 def sha_text(text):
@@ -562,21 +809,70 @@ def record_source(rec, uri, digest):
     hashes.sort()
 
 
+def fetch_script(base, isolate_id, budget, script):
+    obj = rpc(base, "getObject", budget, isolateId=isolate_id, objectId=script["id"])
+    text = obj.get("source")
+    if not isinstance(text, str) or not script.get("uri"):
+        raise FlowError(f"script {script.get('uri')!r} has no source text")
+    return script["uri"], text
+
+
+def finish_examples(rec, found):
+    # Sorted, so the same registrants are kept on every run. A registrant that does not fit keeps its
+    # URI and hash with text None and is counted in source_examples_overflow; nothing is truncated.
+    used, overflow, examples = 0, 0, []
+    for uri, digest, text in sorted(found, key=lambda item: item[:2]):
+        size = len(text.encode("utf-8"))
+        fits = used + size <= SOURCE_EXAMPLE_BYTES
+        if fits:
+            used += size
+        else:
+            overflow += 1
+        examples.append({"uri": uri, "sha256": digest, "bytes": size, "text_omitted": not fits, "text": text if fits else None})
+    rec.update(source_examples=examples, source_examples_bytes=used, source_examples_overflow=overflow)
+
+
 def vm_sources(base, isolate_id, budget, rec):
-    # Fills rec in place, so a failure keeps the scripts hashed so far.
+    # Fills rec in place, so a failure keeps the scripts hashed so far. At most SOURCE_WORKERS calls are
+    # in flight, so nothing queues behind them. After a failure, or once the reserve is reached, no new
+    # call starts; calls already in flight finish, so every completed script still counts.
     scripts = rpc(base, "getScripts", budget, isolateId=isolate_id).get("scripts") or []
     rec["script_count"] = len(scripts)
     if len(scripts) > MAX_SCRIPTS:
         raise FlowError(f"{len(scripts)} scripts exceed the {MAX_SCRIPTS} bound")
-    for script in scripts:
-        if budget.left() < MIN_SOURCE_BUDGET:
-            raise FlowError(f"out of budget after {rec['scripts_hashed']} of {len(scripts)} VM script sources")
-        obj = rpc(base, "getObject", budget, isolateId=isolate_id, objectId=script["id"])
-        text = obj.get("source")
-        if not isinstance(text, str) or not script.get("uri"):
-            raise FlowError(f"script {script.get('uri')!r} has no source text")
-        record_source(rec, script["uri"], sha_text(text))
-        rec["scripts_hashed"] += 1
+    todo = iter(scripts)
+    running, found, failure = set(), [], None
+    try:
+        with ThreadPoolExecutor(max_workers=SOURCE_WORKERS) as pool:
+            while True:
+                while failure is None and len(running) < SOURCE_WORKERS:
+                    script = next(todo, None)
+                    if script is None:
+                        break
+                    if budget.left() < MIN_SOURCE_BUDGET:
+                        failure = FlowError(f"out of budget after {rec['scripts_hashed']} of {len(scripts)} VM script sources")
+                        break
+                    running.add(pool.submit(fetch_script, base, isolate_id, budget, script))
+                if not running:
+                    break
+                done, running = wait(running, return_when=FIRST_COMPLETED)
+                for future in done:
+                    try:
+                        uri, text = future.result()
+                    except Exception as exc:
+                        if failure is None:
+                            failure = exc
+                        continue
+                    digest = sha_text(text)
+                    record_source(rec, uri, digest)
+                    rec["scripts_hashed"] += 1
+                    if SOURCE_EXAMPLE_RE.search(uri):
+                        found.append((uri, digest, text))
+    finally:
+        rec["sources"] = dict(sorted(rec["sources"].items()))
+        finish_examples(rec, found)
+    if failure is not None:
+        raise failure
 
 
 def vm_probe(adb, logtext):
@@ -588,6 +884,9 @@ def vm_probe(adb, logtext):
         "script_count": None,
         "scripts_hashed": 0,
         "sources": {},
+        "source_examples": [],
+        "source_examples_bytes": 0,
+        "source_examples_overflow": 0,
         "sources_complete": False,
         "widget_creation": None,
         "error": None,
@@ -666,6 +965,7 @@ def run_arm(arm, apk, apk_sha, out, budget, log):
         "device": None,
         "install": None,
         "offline": None,
+        "launch_pid": None,
         "flow": {"steps": []},
         "screenshots": {},
         "maps_camera": None,
@@ -686,8 +986,9 @@ def run_arm(arm, apk, apk_sha, out, budget, log):
         set_network(adb, False)
         result["offline"] = assert_offline(adb)
         launch(adb, PACKAGE)
-        drive_onboarding(adb, result, out, PACKAGE)
-        result["logcat"] = logcat_gate(adb)
+        result["launch_pid"] = app_pid(adb, PACKAGE, APP_START_TIMEOUT)
+        drive_onboarding(adb, result, out, PACKAGE, apk, apk_sha)
+        result["logcat"] = logcat_gate(adb, result["launch_pid"], PACKAGE)
         result["db"] = db_check(adb, PACKAGE, out)
         gates(result)
         failing = False
