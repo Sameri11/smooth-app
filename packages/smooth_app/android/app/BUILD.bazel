@@ -13,13 +13,13 @@ flutter_plugin_deps_guards(plugins = "@flutter_plugins")
 # applicationId. The APK uses org.openfoodfacts.scanner, while this manifest's
 # namespace is org.openfoodfacts.app, so expand leading-dot names first.
 #
-# So the names are expanded here, before the merger sees them. Only leading-dot
-# names are rewritten; anything already qualified is left alone.
+# The same pass disables native extraction to match stock's APK loading policy.
+# Only leading-dot names are rewritten; anything already qualified is left alone.
 genrule(
     name = "expanded_manifest",
     srcs = ["src/main/AndroidManifest.xml"],
     outs = ["AndroidManifest.xml"],
-    cmd = "sed 's|android:name=\"\\.|android:name=\"org.openfoodfacts.app.|g' $< > $@",
+    cmd = "sed -e 's|android:name=\"\\.|android:name=\"org.openfoodfacts.app.|g' -e 's|<application|<application android:extractNativeLibs=\"false\"|' $< > $@",
 )
 
 # Android packaging joins the core artifact with this module's targets. Keep
@@ -33,7 +33,14 @@ flutter_android_app(
         # Stock Flutter 3.41.8 apps use minSdk 24; the rules default is the
         # plugin API floor, 21.
         "minSdkVersion": "24",
+        # Stock Flutter sets this instead of the rules' FlutterApplication default.
+        "applicationName": "android.app.Application",
     },
+    # Store native libraries and models; deflate the debug kernel and snapshots.
+    nocompress_extensions = [
+        ".so",
+        ".tflite",
+    ],
     plugins = "@flutter_plugins",
     deps = [
         ":app_kotlin",

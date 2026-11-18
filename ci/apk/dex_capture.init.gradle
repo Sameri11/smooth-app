@@ -1,0 +1,141 @@
+import groovy.json.JsonOutput
+import java.security.MessageDigest
+
+// Uses Gradle task hooks and source-verified AGP 8.11.1 task properties, guarded per record.
+def output = new File(System.getenv('APK_DEX_CAPTURE_FILE') ?: 'dex-capture.jsonl')
+def hashCache = [:]
+def sha256 = { File file ->
+    def digest = MessageDigest.getInstance('SHA-256')
+    file.withInputStream { stream ->
+        byte[] buffer = new byte[65536]
+        for (int count = stream.read(buffer); count >= 0; count = stream.read(buffer)) {
+            if (count > 0) digest.update(buffer, 0, count)
+        }
+    }
+    digest.digest().encodeHex().toString()
+}
+
+def safeRead = { target, String property ->
+    try {
+        def value = target."${property}"
+        if (value instanceof org.gradle.api.provider.Provider) value = value.orNull
+        [status: 'captured', value: value]
+    } catch (Throwable error) {
+        [status: 'unavailable', error: error.class.name]
+    }
+}
+def boundedFiles = { value, int limit = 32 ->
+    try {
+        def files = value == null ? [] : (value instanceof Collection ? value : value.files)
+        def selected = files.findAll { it instanceof File }.sort { a, b -> a.path <=> b.path }.take(limit)
+        [status: files.size() > limit ? 'truncated' : 'captured',
+         files: selected.collect { file ->
+             try {
+                 def path = file.canonicalPath
+                 [path: path, sha256: file.isFile() ? hashCache.computeIfAbsent(path) { sha256(file) } : null]
+             }
+             catch (Throwable error) { [path: file.path, status: 'unavailable', error: error.class.name] }
+         }]
+    } catch (Throwable error) {
+        [status: 'unavailable', error: error.class.name]
+    }
+}
+def codeSource = { Class type ->
+    try {
+        def location = type.protectionDomain?.codeSource?.location
+        if (location == null || location.protocol != 'file') {
+            return [status: 'unavailable', reason: 'class code source is not a local file URL']
+        }
+        def file = new File(location.toURI())
+        def path = file.canonicalPath
+        [status: 'captured', path: path,
+         sha256: file.isFile() ? hashCache.computeIfAbsent(path) { sha256(file) } : null]
+    } catch (Throwable error) {
+        [status: 'unavailable', error: error.class.name]
+    }
+}
+def selectedD8Tool = { ClassLoader taskLoader ->
+    try {
+        def action = taskLoader.loadClass('com.android.build.gradle.internal.dexing.DexWorkAction')
+        def actionLoader = action.classLoader
+        def version = actionLoader.loadClass('com.android.tools.r8.Version')
+        def d8 = actionLoader.loadClass('com.android.tools.r8.D8')
+        def versionString
+        try {
+            versionString = version.getMethod('getVersionString').invoke(null)
+        } catch (Throwable error) {
+            versionString = [status: 'unavailable', error: error.class.name]
+        }
+        [status: 'observed',
+         provenance: 'task_time_configured_worker_tool_selection',
+         limitation: 'Resolved through the DexWorkAction classloader at task execution; not proof of worker entry, actual D8 invocation, or artifact-transform worker identity.',
+         worker_action_class: action.name,
+         d8_version: versionString,
+         version_class_code_source: codeSource(version),
+         d8_class_code_source: codeSource(d8)]
+    } catch (Throwable error) {
+        [status: 'unavailable', provenance: 'task_time_configured_worker_tool_selection',
+         error: error.class.name]
+    }
+}
+
+
+gradle.taskGraph.whenReady { graph ->
+    graph.allTasks.each { task ->
+        
+        def taskTypes = []
+        for (Class type = task.class; type != null; type = type.superclass) {
+            taskTypes << type.name
+        }
+        def kind = taskTypes.contains('com.android.build.gradle.internal.tasks.DexArchiveBuilderTask')
+            ? 'dex_archive_builder'
+            : taskTypes.contains('com.android.build.gradle.internal.tasks.DexMergingTask')
+                ? 'dex_merger'
+                : task.name.toLowerCase().contains('dex') ? 'other_dex_task' : null
+        if (kind != null) {
+            task.doFirst {
+                def record = [
+                    status: 'executed_task_observation',
+                    provenance: 'taskreported',
+                    scope: kind == 'dex_archive_builder' ? 'dex_archive_builder_task' :
+                        kind == 'dex_merger' ? 'dex_archive_merger_task' : 'unclassified_dex_task',
+                    task_path: task.path,
+                    task_class: task.class.name,
+                    dex_parameters: [:],
+                    d8_worker: [status: 'unavailable',
+                        reason: 'Task observation does not prove worker execution identity; no worker hook is installed.']
+                ]
+                if (kind == 'dex_archive_builder') {
+                    record.task_time_tool_selection = selectedD8Tool(task.class.classLoader)
+                    try {
+                        // AGP 8.11.1 DexArchiveBuilderTask exposes these nested task inputs.
+                        def params = task.dexParams
+                        ['minSdkVersion', 'debuggable', 'withDesugaring',
+                         'enableGlobalSynthetics', 'enableApiModeling', 'errorFormatMode'].each { key ->
+                            record.dex_parameters[key] = safeRead(params, key)
+                        }
+                        ['desugarBootclasspath', 'desugarClasspath', 'desugarLibConfigFiles'].each { key ->
+                            def result = safeRead(params, key)
+                            record.dex_parameters[key] = result.status == 'captured'
+                                ? boundedFiles(result.value) : result
+                        }
+                    } catch (Throwable error) {
+                        record.dex_parameters.task_parameters = [status: 'unavailable', error: error.class.name]
+                    }
+                } else {
+                    record.dex_parameters.status = 'not_applicable_or_unverified_for_task_kind'
+                }
+                def line = JsonOutput.toJson(record) + '\n'
+                try {
+                    if (output.length() + line.getBytes('UTF-8').length > 1048576L) {
+                        throw new GradleException('APK_DexCapture exceeded 1 MiB evidence bound')
+                    }
+                    output.parentFile.mkdirs()
+                    output.append(line, 'UTF-8')
+                } catch (Throwable error) {
+                    logger.warn("APK_DexCapture record unavailable for ${task.path}: ${error.class.name}")
+                }
+            }
+        }
+    }
+}

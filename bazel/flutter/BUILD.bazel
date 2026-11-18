@@ -8,6 +8,8 @@
 package(default_visibility = ["//visibility:public"])
 
 exports_files([
+    "custom_tabs.bzl",
+    "jni.bzl",
     "rive_native.bzl",
     "sqlite3.bzl",
     "smooth_app_fixes.bzl",
