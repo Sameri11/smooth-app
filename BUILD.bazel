@@ -1,1 +1,17 @@
+load("@rules_kotlin//kotlin:core.bzl", "define_kt_toolchain", "kt_kotlinc_options")
+
 exports_files(["plugin_deps.MODULE.bazel"])
+
+kt_kotlinc_options(
+    name = "app_default_kotlinc_options",
+    x_lambdas = "indy",
+    x_sam_conversions = "indy",
+)
+
+define_kt_toolchain(
+    name = "app_kotlin_toolchain",
+    api_version = "2.2",
+    jvm_target = "1.8",
+    kotlinc_options = ":app_default_kotlinc_options",
+    language_version = "2.2",
+)

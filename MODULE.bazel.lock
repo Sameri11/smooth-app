@@ -380,7 +380,7 @@
     "@@sameri11_rules_flutter_android+//flutter:extensions.bzl%flutter_plugins_ext": {
       "general": {
         "bzlTransitiveDigest": "NS16aBoAM0iS/Shs6RMFCdcqpACVoFEsiT3VA385x2U=",
-        "usagesDigest": "NwFAveYCZBCrRUP4QeFAsca80O8IVnJQsvH5K9aYjys=",
+        "usagesDigest": "U4edbj2iNIiSBIft4V2ugtYYi0RO4T9AyQbB+i3st3A=",
         "recordedInputs": [
           "REPO_MAPPING:,flutter_maven rules_jvm_external++maven+flutter_maven",
           "REPO_MAPPING:,pub_smooth_app sameri11_rules_flutter_core++pub+pub_smooth_app",
@@ -435,6 +435,7 @@
                 "androidx.tracing:tracing-android:1.3.0",
                 "androidx.tracing:tracing-ktx:1.3.0",
                 "commons-io:commons-io:2.20.0",
+                "io.sentry:sentry-spotlight:8.49.0",
                 "org.jetbrains.kotlin:kotlin-stdlib:2.2.20",
                 "org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0",
                 "org.jetbrains.kotlinx:kotlinx-coroutines-core:1.9.0",
