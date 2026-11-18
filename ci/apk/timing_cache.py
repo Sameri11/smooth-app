@@ -7,7 +7,7 @@ RUNNER = Path(os.environ.get("RUNNER_TEMP", "."))
 ROOT, TRANSPORT = RUNNER / "apk-timing", RUNNER / "apk-timing-cache"
 WORKTREE = Path(__file__).resolve().parents[2]
 GIB, HEADROOM = 1 << 30, 64 << 20
-CAPS = {"stock-cold": 5 * GIB, "bazel-cold": 3 * GIB, "stock-lib": GIB}
+CAPS = {"stock-cold": 8 * GIB, "bazel-cold": 3 * GIB, "stock-lib": GIB}
 PACKAGES = ("packages/smooth_app", "packages/app_store/apple_app_store", "packages/app_store/google_play", "packages/app_store/shared", "packages/app_store/uri_store", "packages/scanner/ml_kit", "packages/scanner/shared", "packages/scanner/zxing")
 CREDENTIAL_NAMES = {".netrc", ".npmrc", ".pypirc", "credentials", "credentials.json", "remote-cache.bazelrc", "google-services.json", "key.properties", "id_rsa", "id_ed25519", "known_hosts", "auth.json", "token", "access_token", "refresh_token"}
 def credential_name(name):
