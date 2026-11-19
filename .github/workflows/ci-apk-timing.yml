@@ -2,7 +2,7 @@ name: Debug APK remote output comparison
 
 on:
   push:
-    branches: [prototype/apk-output-policy]
+    branches: ['**']
     paths:
       - '.github/workflows/ci-apk-timing.yml'
       - 'ci/apk/timing.py'
@@ -24,14 +24,14 @@ env:
 jobs:
   bazel-cold:
     name: bazel / cold
-    if: github.repository == 'Sameri11/smooth-app'
+    if: github.repository == 'Sameri11/smooth-app' && github.ref == format('refs/heads/prot{0}', 'otype/apk-jobs-concurrency')
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     outputs:
       apk_proof: ${{ steps.build.outputs.apk_proof }}
     env:
       SCENARIO: cold
-      APK_DOWNLOAD_OUTPUTS: all
+      APK_BAZEL_JOBS: default
     steps: &workload
       - name: Start required-result clock and isolate state
         shell: bash
@@ -58,7 +58,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
-          fetch-depth: 6
+          fetch-depth: 7
       - name: Check out frozen rules
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -232,49 +232,49 @@ jobs:
           APK_TIMING_JOB_STATUS: ${{ job.status }}
         run: python3 ci/apk/timing.py verify --engine "$ENGINE" --scenario "$SCENARIO"
 
-  bazel-warm-all:
-    name: bazel / warm / all
+  bazel-warm-j4:
+    name: bazel / warm / j4
     needs: bazel-cold
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     env:
       SCENARIO: warm
-      APK_DOWNLOAD_OUTPUTS: all
+      APK_BAZEL_JOBS: '4'
       APK_SEED_PROOF: ${{ needs.bazel-cold.outputs.apk_proof }}
     steps: *workload
 
-  bazel-warm-toplevel:
-    name: bazel / warm / toplevel
-    needs: [bazel-cold, bazel-warm-all]
+  bazel-warm-j128:
+    name: bazel / warm / j128
+    needs: [bazel-cold, bazel-warm-j4]
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     env:
       SCENARIO: warm
-      APK_DOWNLOAD_OUTPUTS: toplevel
+      APK_BAZEL_JOBS: '128'
       APK_SEED_PROOF: ${{ needs.bazel-cold.outputs.apk_proof }}
     steps: *workload
 
-  bazel-lib-toplevel:
-    name: bazel / lib / toplevel
-    needs: [bazel-cold, bazel-warm-toplevel]
+  bazel-lib-j128:
+    name: bazel / lib / j128
+    needs: [bazel-cold, bazel-warm-j128]
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     outputs:
       apk_proof: ${{ steps.build.outputs.apk_proof }}
     env:
       SCENARIO: lib
-      APK_DOWNLOAD_OUTPUTS: toplevel
+      APK_BAZEL_JOBS: '128'
       APK_SEED_PROOF: ${{ needs.bazel-cold.outputs.apk_proof }}
     steps: *workload
 
-  bazel-lib-all:
-    name: bazel / lib / all
-    needs: [bazel-cold, bazel-lib-toplevel]
+  bazel-lib-j4:
+    name: bazel / lib / j4
+    needs: [bazel-cold, bazel-lib-j128]
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     env:
       SCENARIO: lib
-      APK_DOWNLOAD_OUTPUTS: all
+      APK_BAZEL_JOBS: '4'
       APK_SEED_PROOF: ${{ needs.bazel-cold.outputs.apk_proof }}
-      APK_EDIT_PROOF: ${{ needs.bazel-lib-toplevel.outputs.apk_proof }}
+      APK_EDIT_PROOF: ${{ needs.bazel-lib-j128.outputs.apk_proof }}
     steps: *workload

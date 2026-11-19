@@ -32,7 +32,7 @@ SDK = Path(os.environ.get("RUNNER_TEMP", tempfile.gettempdir())) / "flutter"
 PUB = Path(os.environ.get("RUNNER_TEMP", tempfile.gettempdir())) / "cache-state" / "pub"
 BAZELISK = Path(os.environ.get("RUNNER_TEMP", tempfile.gettempdir())) / "cache-state" / "bazelisk"
 WORKLOAD_HEAD = "6e7408fda8e46bc97a0d8f2b33a801cf27c8dabe"
-PREVIOUS_HARNESS_HEAD = "5e3a6a1951c2f306c665fc0bd94e940c4c438f7a"
+PREVIOUS_HARNESS_HEAD = "b10ff4f1157fba52b2cd566e5c34965397de3c1d"
 HARNESS_FILES = {
     ".github/workflows/ci-apk-timing.yml", "ci/apk/timing.py", "ci/apk/timing_cache.py",
 }
@@ -41,7 +41,9 @@ PROFILE_PHASES = {
     "Load and analyze dependencies", "Load, analyze dependencies and build artifacts",
     "Analyze licenses", "Prepare for build", "Build artifacts", "Complete build",
 }
-REMOTE_PROFILE_CATEGORIES = {"remote action cache check", "remote network", "remote output download"}
+REMOTE_PROFILE_CATEGORIES = {
+    "remote action cache check", "remote network", "remote output download", "Fetching repository",
+}
 RESOURCE_SAMPLE_SECONDS = 1.0
 OLD_SHA = "35edd245bf824b5805d0453d0583d60c69b12a49a1468387217f5a902eb5bfd9"
 NEW_SHA = "5e0160f09b1bed2fab4dfa38d5e481f350e3f3024b49836e49ecbb6402825b61"
@@ -332,10 +334,19 @@ def runner_metadata():
 def requested_download_outputs(engine, scenario):
     if engine != "bazel":
         return None
-    mode = os.environ.get("APK_DOWNLOAD_OUTPUTS")
-    if mode not in ("all", "toplevel") or (scenario == "cold" and mode != "all"):
-        raise RuntimeError("APK_DOWNLOAD_OUTPUTS must be all or toplevel; cold seed requires all")
-    return mode
+    return "all" if scenario == "cold" else "toplevel"
+
+
+def requested_bazel_jobs(engine, scenario):
+    if engine != "bazel":
+        return None
+    jobs = os.environ.get("APK_BAZEL_JOBS")
+    if scenario == "cold":
+        if jobs != "default":
+            raise RuntimeError("cold seed requires APK_BAZEL_JOBS=default")
+    elif jobs not in ("4", "128"):
+        raise RuntimeError("APK_BAZEL_JOBS must be 4 or 128 for readers")
+    return jobs
 
 
 def proof_identity(identity):
@@ -353,7 +364,7 @@ def policy_references(identity, env):
     for key, name, predecessor, required in (
         ("seed_sha256", "APK_SEED_PROOF", "cold", scenario != "cold"),
         ("edit_sha256", "APK_EDIT_PROOF", "lib",
-         scenario == "lib" and identity["download_outputs"] == "all"),
+         scenario == "lib" and identity["bazel_jobs"] == "4"),
     ):
         proof = env.get(name, "")
         if not required:
@@ -370,14 +381,20 @@ def policy_references(identity, env):
 def require_policy_apk(scenario, references, apk_sha256):
     if scenario == "warm" and apk_sha256 != references["seed_sha256"]:
         raise RuntimeError("unchanged APK digest does not match the cold seed")
+    expected = ("749a34170ea803bb8d84e3fce0f47f6288dd576f74c0e39e8cc13df6a8cdda8b"
+                if scenario in ("cold", "warm") else
+                "e24aefe28e6a84478fc259a9b8a79dfead0341a70476a1a219e207c2051e1bac")
+    if apk_sha256 != expected:
+        raise RuntimeError(f"{scenario} APK digest differs from frozen expected digest")
     if scenario == "lib" and apk_sha256 == references["seed_sha256"]:
         raise RuntimeError("edited APK digest matches the unedited APK")
     if "edit_sha256" in references and apk_sha256 != references["edit_sha256"]:
-        raise RuntimeError("edited APK digests do not match across policies")
+        raise RuntimeError("edited APK digests do not match across jobs")
 
 
 def cmd_prepare(args):
     download_outputs = requested_download_outputs(args.engine, args.scenario)
+    bazel_jobs = requested_bazel_jobs(args.engine, args.scenario)
     ROOT.mkdir(parents=True, exist_ok=True)
     head = dispatch_head()
     manifest = verify_frozen()
@@ -388,7 +405,7 @@ def cmd_prepare(args):
                           "workload_head": WORKLOAD_HEAD,
                           "attempt": os.environ.get("GITHUB_RUN_ATTEMPT", ""),
                           "engine": args.engine, "scenario": args.scenario,
-                          "download_outputs": download_outputs,
+                          "download_outputs": download_outputs, "bazel_jobs": bazel_jobs,
                           "workflow_start_epoch": None,
                           "inputs_sha256": digest(json.dumps(manifest["inputs"], sort_keys=True).encode()),
                           "rules_revision": manifest["rules"]["revision"],
@@ -397,7 +414,7 @@ def cmd_prepare(args):
              "runner": runner_metadata(),
              "build_config": {"target": APK_TARGET, "stock_target": ENTRYPOINT, "abi": "x86_64",
                               "mode": "debug", "bazel_configuration": "fastbuild",
-                              "bazel_jobs": "default (4-vCPU runner)",
+                              "bazel_jobs": bazel_jobs,
                               "compile_sdk": 36, "build_tools": "36.0.0", "ndk": "28.2.13676358",
                               "java": 17, "lockfile_mode": "error"},
              "phases": [], "commands": [], "errors": [],
@@ -413,7 +430,7 @@ def cmd_prepare(args):
         state["identity"]["workflow_start_epoch"] = state["workflow_clock"].get("job_start_epoch")
     save(state)
     print(json.dumps({"status": "prepared", "tree": str(tree), "head": head,
-                      "download_outputs": download_outputs}))
+                      "download_outputs": download_outputs, "bazel_jobs": bazel_jobs}))
 
 
 def job_env(engine, state):
@@ -485,7 +502,10 @@ def bazel_argv(root, command_name, env, *, bep=None, remote=True, extra=()):
              "--android_platforms=@rules_android//:x86_64", "--@rules_flutter_core//flutter:mode=debug",
              "-c", "fastbuild", "--merge_android_manifest_permissions", "--tool_java_language_version=17",
              "--tool_java_runtime_version=remotejdk_17", "--java_language_version=17",
-             "--java_runtime_version=remotejdk_17", "--desugar_java8_libs", "--color=no", "--curses=no", *extra]
+             "--java_runtime_version=remotejdk_17", "--desugar_java8_libs", "--color=no", "--curses=no",
+             *(["--jobs=" + _ACTIVE_STATE["identity"]["bazel_jobs"]]
+               if _ACTIVE_STATE["identity"]["bazel_jobs"] in ("4", "128") else []),
+             *extra]
     if remote:
         policy = _ACTIVE_STATE["remote_cache"]
         args += ["--experimental_remote_scrubbing_config=" + str(scrub), "--remote_executor=",
@@ -612,57 +632,81 @@ def collect_profile(path):
         if not path.is_file():
             return {"status": "missing"}
         try:
-            document = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+            raw = path.read_bytes()
+            if raw.startswith(b"\x1f\x8b"):
+                raw = gzip.decompress(raw)
+            document = json.loads(raw.decode("utf-8"))
+        except (OSError, gzip.BadGzipFile, json.JSONDecodeError, UnicodeDecodeError):
             return {"status": "invalid"}
         events = document.get("traceEvents") if isinstance(document, dict) else None
         if not isinstance(events, list):
             return {"status": "invalid"}
-        phase_spans, action_spans, mnemonics = {}, [], {}
+        phase_markers, action_spans, mnemonics = [], [], {}
         remote_categories = {key: {"event_count": 0, "max_event_span_seconds": 0.0}
                              for key in sorted(REMOTE_PROFILE_CATEGORIES)}
-        download_spans = []
+        fetch_spans, download_spans = [], []
         action_duration = 0.0
         action_count = 0
+        profile_end = max((event["ts"] + event.get("dur", 0)
+                           for event in events if isinstance(event, dict)
+                           and isinstance(event.get("ts"), (int, float))
+                           and isinstance(event.get("dur", 0), (int, float))
+                           and not isinstance(event.get("dur", 0), bool)), default=0)
         for event in events:
-            if not isinstance(event, dict) or event.get("ph") != "X":
+            if not isinstance(event, dict):
                 continue
-            ts, duration = event.get("ts"), event.get("dur")
-            if (not isinstance(ts, (int, float)) or isinstance(ts, bool)
-                    or not isinstance(duration, (int, float)) or isinstance(duration, bool) or duration < 0):
+            category, name, ph = event.get("cat"), event.get("name"), event.get("ph")
+            ts, duration = event.get("ts"), event.get("dur", 0)
+            if not isinstance(ts, (int, float)) or isinstance(ts, bool):
                 continue
-            category, name = event.get("cat"), event.get("name")
+            if category == "build phase marker" and name in PROFILE_PHASES and ph in ("i", "I", "X"):
+                phase_markers.append((float(ts), str(name)))
+            if (ph != "X" or not isinstance(duration, (int, float)) or isinstance(duration, bool)
+                    or duration < 0):
+                continue
             span = float(duration) / 1_000_000
-            if category == "build phase marker" and name in PROFILE_PHASES:
-                phase_spans[name] = max(phase_spans.get(name, 0.0), span)
             if category in remote_categories:
                 remote_categories[category]["event_count"] += 1
                 remote_categories[category]["max_event_span_seconds"] = max(
                     remote_categories[category]["max_event_span_seconds"], span)
-            if category == "remote output download":
-                download_spans.append((ts, ts + duration))
-            if category != "action processing":
-                continue
-            args = event.get("args") if isinstance(event.get("args"), dict) else {}
-            action_count += 1
-            action_duration += float(duration)
-            action_spans.extend(((float(ts), 1), (float(ts + duration), -1)))
-            mnemonic = args.get("mnemonic")
-            if isinstance(mnemonic, str) and re.fullmatch(r"[A-Za-z0-9_]{1,80}", mnemonic):
-                mnemonics[mnemonic] = mnemonics.get(mnemonic, 0) + 1
+            if category == "Fetching repository":
+                fetch_spans.append((float(ts), float(ts + duration)))
+            elif category == "remote output download":
+                download_spans.append((float(ts), float(ts + duration)))
+            if category == "action processing":
+                args = event.get("args") if isinstance(event.get("args"), dict) else {}
+                action_count += 1
+                action_duration += float(duration)
+                action_spans.extend(((float(ts), 1), (float(ts + duration), -1)))
+                mnemonic = args.get("mnemonic")
+                if isinstance(mnemonic, str) and re.fullmatch(r"[A-Za-z0-9_]{1,80}", mnemonic):
+                    mnemonics[mnemonic] = mnemonics.get(mnemonic, 0) + 1
+        phase_markers.sort()
+        phase_rows = [{"name": name, "timestamp_seconds": round(ts / 1_000_000, 6),
+                       "duration_to_next_seconds": round(((phase_markers[i + 1][0] if i + 1 < len(phase_markers) else profile_end) - ts) / 1_000_000, 6)}
+                      for i, (ts, name) in enumerate(phase_markers)]
         concurrent = peak_concurrent = 0
         for _, change in sorted(action_spans, key=lambda item: (item[0], item[1])):
             concurrent += change
             peak_concurrent = max(peak_concurrent, concurrent)
-        download_end = download_union = 0
+        fetch_end = fetch_union = 0.0
+        for start, end in sorted(fetch_spans):
+            fetch_union += max(0.0, end - max(start, fetch_end))
+            fetch_end = max(fetch_end, end)
+        remote_categories["Fetching repository"]["union_seconds"] = round(fetch_union / 1_000_000, 6)
+        download_end = download_union = 0.0
         for start, end in sorted(download_spans):
-            download_union += max(0, end - max(start, download_end))
+            download_union += max(0.0, end - max(start, download_end))
             download_end = max(download_end, end)
         remote_categories["remote output download"]["union_seconds"] = round(download_union / 1_000_000, 6)
         return {
             "status": "available",
-            "schema": "Bazel 9.2 traceEvents: ph=X; build phase marker, action processing, remote profiler categories",
-            "build_phase_marker_max_span_seconds": {key: round(value, 6) for key, value in sorted(phase_spans.items())},
+            "schema": "Bazel 9.2 traceEvents: build phase marker instant events; action and remote spans ph=X",
+            "build_phase_markers": phase_rows,
+            "build_phase_marker_event_count": len(phase_rows),
+            "repository_fetch": {"event_count": remote_categories["Fetching repository"]["event_count"],
+                                "union_seconds": round(fetch_union / 1_000_000, 6),
+                                "category": "Fetching repository"},
             "action_event_count": action_count,
             "action_concurrency_peak": peak_concurrent,
             "action_duration_sum_seconds": round(action_duration / 1_000_000, 6),
@@ -738,8 +782,9 @@ def cmd_run(args):
     if ident["head"] != head:
         raise RuntimeError("checkout HEAD/GITHUB_SHA identity changed")
     mode = requested_download_outputs(args.engine, args.scenario)
-    if ident.get("download_outputs") != mode:
-        raise RuntimeError("download policy differs from prepared identity")
+    jobs = requested_bazel_jobs(args.engine, args.scenario)
+    if ident.get("download_outputs") != mode or ident.get("bazel_jobs") != jobs:
+        raise RuntimeError("download mode or Bazel jobs differs from prepared identity")
     references = policy_references(ident, os.environ) if mode else {}
     if mode and references != state.get("output_policy"):
         raise RuntimeError("APK digest references differ from prepared identity")
@@ -860,7 +905,8 @@ def cmd_emit(args):
                               "run_id": os.environ.get("GITHUB_RUN_ID", ""),
                               "attempt": os.environ.get("GITHUB_RUN_ATTEMPT", ""),
                               "engine": args.engine, "scenario": args.scenario,
-                              "download_outputs": os.environ.get("APK_DOWNLOAD_OUTPUTS")},
+                              "download_outputs": None if args.engine != "bazel" else ("all" if args.scenario == "cold" else "toplevel"),
+                              "bazel_jobs": os.environ.get("APK_BAZEL_JOBS")},
                  "phases": [], "commands": [], "errors": []}
     for sidecar in (ROOT / "cache.json", ROOT / "workflow-clock.json"):
         if sidecar.is_file():
