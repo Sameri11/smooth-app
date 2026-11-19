@@ -91,9 +91,53 @@ use_repo(rules_kotlin_extensions, "com_github_google_ksp", "com_github_jetbrains
 
 register_toolchains("//:app_kotlin_toolchain")
 
-# The proxy and the import stay in this Consumer Module so the generated
-# Android plugin segment declares the sole flutter_maven install.
+# Try the Maven Central mirror before repo1 for rules_android's own installs.
 maven = use_extension("@rules_jvm_external//:extensions.bzl", "maven")
+maven.install(
+    name = "rules_android_maven",
+    known_contributing_modules = ["rules_android"],
+    repositories = [
+        "https://maven.google.com",
+        "https://maven-central.storage-download.googleapis.com/maven2",
+        "https://repo1.maven.org/maven2",
+    ],
+    use_starlark_android_rules = True,
+)
+maven.install(
+    name = "android_ide_common_30_1_3",
+    known_contributing_modules = ["rules_android"],
+    repositories = [
+        "https://maven.google.com",
+        "https://maven-central.storage-download.googleapis.com/maven2",
+        "https://repo1.maven.org/maven2",
+    ],
+    use_starlark_android_rules = True,
+)
+maven.install(
+    name = "bazel_worker_maven",
+    known_contributing_modules = ["bazel_worker_java"],
+    repositories = [
+        "https://maven.google.com",
+        "https://maven-central.storage-download.googleapis.com/maven2",
+        "https://repo1.maven.org/maven2",
+        "https://repo.maven.apache.org/maven2",
+    ],
+)
+
+foreign_cc_tools = use_extension("@rules_foreign_cc//foreign_cc:extensions.bzl", "tools")
+foreign_cc_tools.make(
+    mode = "source",
+    version = "4.4.1",
+)
+foreign_cc_tools.m4(
+    mode = "source",
+    version = "1.4.21",
+)
+foreign_cc_tools.pkgconfig(
+    mode = "source",
+    version = "3.0.7",
+)
+
 use_repo(maven, "flutter_maven")
 
 # This root module owns the Android SDK and NDK repositories and toolchains.

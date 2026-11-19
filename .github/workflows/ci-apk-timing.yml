@@ -7,6 +7,10 @@ on:
       - '.github/workflows/ci-apk-timing.yml'
       - 'ci/apk/timing.py'
       - 'ci/apk/timing_cache.py'
+      - 'ci/apk/arms/**'
+      - 'MODULE.bazel'
+      - 'ci/apk/maven-downloader.cfg'
+      - 'MODULE.bazel.lock'
 
 permissions:
   contents: read
@@ -24,14 +28,15 @@ env:
 jobs:
   bazel-cold:
     name: bazel / cold
-    if: github.repository == 'Sameri11/smooth-app' && github.ref == format('refs/heads/prot{0}', 'otype/apk-jobs-concurrency')
+    if: github.repository == 'Sameri11/smooth-app' && github.ref == format('refs/heads/prot{0}', 'otype/apk-host-tools')
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     outputs:
       apk_proof: ${{ steps.build.outputs.apk_proof }}
     env:
       SCENARIO: cold
-      APK_BAZEL_JOBS: default
+      APK_ARM: src
+      APK_BAZEL_JOBS: '128'
     steps: &workload
       - name: Start required-result clock and isolate state
         shell: bash
@@ -49,7 +54,7 @@ jobs:
             echo "PUB_CACHE=$RUNNER_TEMP/cache-state/pub"
             echo "BAZELISK_HOME=$RUNNER_TEMP/cache-state/bazelisk"
             echo "APK_TIMING_DEADLINE_EPOCH=$(( $(date +%s) + 3300 ))"
-            echo "APK_CACHE_KEY=apk-current-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-$GITHUB_SHA-$ENGINE-cold"
+            echo "APK_CACHE_KEY=apk-current-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-$GITHUB_SHA-$ENGINE-$APK_ARM-cold"
           } >> "$GITHUB_ENV"
           echo "$JAVA_HOME_17_X64/bin" >> "$GITHUB_PATH"
           df -Pk "$RUNNER_TEMP"
@@ -58,7 +63,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
-          fetch-depth: 7
+          fetch-depth: 8
       - name: Check out frozen rules
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -232,49 +237,65 @@ jobs:
           APK_TIMING_JOB_STATUS: ${{ job.status }}
         run: python3 ci/apk/timing.py verify --engine "$ENGINE" --scenario "$SCENARIO"
 
-  bazel-warm-j4:
-    name: bazel / warm / j4
+  bazel-cold-prebuilt:
+    name: bazel / cold / prebuilt
     needs: bazel-cold
     runs-on: ubuntu-24.04
     timeout-minutes: 60
+    outputs:
+      apk_proof: ${{ steps.build.outputs.apk_proof }}
     env:
-      SCENARIO: warm
-      APK_BAZEL_JOBS: '4'
-      APK_SEED_PROOF: ${{ needs.bazel-cold.outputs.apk_proof }}
+      SCENARIO: cold
+      APK_ARM: prebuilt
+      APK_BAZEL_JOBS: '128'
     steps: *workload
 
-  bazel-warm-j128:
-    name: bazel / warm / j128
-    needs: [bazel-cold, bazel-warm-j4]
+  bazel-warm-prebuilt:
+    name: bazel / warm / prebuilt
+    needs: [bazel-cold, bazel-cold-prebuilt]
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     env:
       SCENARIO: warm
+      APK_ARM: prebuilt
+      APK_BAZEL_JOBS: '128'
+      APK_SEED_PROOF: ${{ needs.bazel-cold-prebuilt.outputs.apk_proof }}
+    steps: *workload
+
+  bazel-warm-src:
+    name: bazel / warm / src
+    needs: [bazel-cold, bazel-warm-prebuilt]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      SCENARIO: warm
+      APK_ARM: src
       APK_BAZEL_JOBS: '128'
       APK_SEED_PROOF: ${{ needs.bazel-cold.outputs.apk_proof }}
     steps: *workload
 
-  bazel-lib-j128:
-    name: bazel / lib / j128
-    needs: [bazel-cold, bazel-warm-j128]
+  bazel-lib-src:
+    name: bazel / lib / src
+    needs: [bazel-cold, bazel-warm-src]
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     outputs:
       apk_proof: ${{ steps.build.outputs.apk_proof }}
     env:
       SCENARIO: lib
+      APK_ARM: src
       APK_BAZEL_JOBS: '128'
       APK_SEED_PROOF: ${{ needs.bazel-cold.outputs.apk_proof }}
     steps: *workload
 
-  bazel-lib-j4:
-    name: bazel / lib / j4
-    needs: [bazel-cold, bazel-lib-j128]
+  bazel-lib-prebuilt:
+    name: bazel / lib / prebuilt
+    needs: [bazel-cold-prebuilt, bazel-lib-src]
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     env:
       SCENARIO: lib
-      APK_BAZEL_JOBS: '4'
-      APK_SEED_PROOF: ${{ needs.bazel-cold.outputs.apk_proof }}
-      APK_EDIT_PROOF: ${{ needs.bazel-lib-j128.outputs.apk_proof }}
+      APK_ARM: prebuilt
+      APK_BAZEL_JOBS: '128'
+      APK_SEED_PROOF: ${{ needs.bazel-cold-prebuilt.outputs.apk_proof }}
     steps: *workload

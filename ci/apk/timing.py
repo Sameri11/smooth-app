@@ -32,9 +32,11 @@ SDK = Path(os.environ.get("RUNNER_TEMP", tempfile.gettempdir())) / "flutter"
 PUB = Path(os.environ.get("RUNNER_TEMP", tempfile.gettempdir())) / "cache-state" / "pub"
 BAZELISK = Path(os.environ.get("RUNNER_TEMP", tempfile.gettempdir())) / "cache-state" / "bazelisk"
 WORKLOAD_HEAD = "6e7408fda8e46bc97a0d8f2b33a801cf27c8dabe"
-PREVIOUS_HARNESS_HEAD = "b10ff4f1157fba52b2cd566e5c34965397de3c1d"
+PREVIOUS_HARNESS_HEAD = "ee046447ef1c36c92f0e8a8c391d77a4938794d9"
 HARNESS_FILES = {
     ".github/workflows/ci-apk-timing.yml", "ci/apk/timing.py", "ci/apk/timing_cache.py",
+    "ci/apk/maven-downloader.cfg", "MODULE.bazel", "ci/apk/arms/prebuilt.json", "ci/apk/arms/src.json",
+    "ci/apk/arms/prebuilt.MODULE.bazel.lock", "ci/apk/arms/src.MODULE.bazel.lock",
 }
 PROFILE_PHASES = {
     "Launch Blaze", "Initialize command", "Evaluate target patterns",
@@ -127,6 +129,18 @@ def _system_memory_usage():
         return None
 
 
+def network_429_urls(output):
+    failed = set(re.findall(
+        r"Download from (https://\S+) failed:[^\r\n]*(?:GET returned 429|HTTP response code: 429)",
+        output,
+    ))
+    failed.update(re.findall(
+        r"HTTP response code: 429 for URL: (https://[^\s)]+)",
+        output,
+    ))
+    return sorted(failed)
+
+
 def command(state, name, argv, cwd, env, timeout=3600, *, output_limit=5000,
             sample_resources=False):
     start_epoch, start_mono = time.time(), time.monotonic()
@@ -190,6 +204,10 @@ def command(state, name, argv, cwd, env, timeout=3600, *, output_limit=5000,
     row = {"name": name, "argv": stored_argv, "cwd": str(cwd), "start_epoch": start_epoch,
            "end_epoch": end_epoch, "duration_seconds": round(time.monotonic() - start_mono, 6),
            "exit_code": rc, "output_tail": text[-output_limit:]}
+    if name == "bazel-build-apk":
+        failed_urls = network_429_urls(text)
+        row["network_429_urls"] = failed_urls
+        row["network_429_count"] = len(failed_urls)
     if sample_resources:
         memory = {
             "status": "sampled" if min_mem_available is not None else "unavailable",
@@ -287,7 +305,7 @@ def dispatch_head():
     return head
 
 
-def tracked_tree(engine):
+def tracked_tree(engine, arm="src"):
     tree = ROOT / "trees" / engine
     if tree.exists():
         shutil.rmtree(tree)
@@ -304,6 +322,24 @@ def tracked_tree(engine):
         if not rules.is_dir():
             raise RuntimeError("frozen .ci-rules checkout is absent")
         shutil.copytree(rules, tree / ".ci-rules", symlinks=True, ignore=shutil.ignore_patterns(".git"))
+        if arm not in ("src", "prebuilt"):
+            raise RuntimeError("APK_ARM must be src or prebuilt")
+        shutil.copy2(WS / "MODULE.bazel", tree / "MODULE.bazel")
+        arm_lock = WS / "ci/apk/arms" / f"{arm}.MODULE.bazel.lock"
+        shutil.copy2(arm_lock if arm_lock.is_file() else WS / "MODULE.bazel.lock",
+                     tree / "MODULE.bazel.lock")
+        arm_config = json.loads((WS / "ci/apk/arms" / f"{arm}.json").read_text())
+        module = (tree / "MODULE.bazel").read_text()
+        # CMake/Ninja stay registered for the JNI -GNinja invocation.
+        for tool, setting in arm_config["foreign_cc"].items():
+            call = f'foreign_cc_tools.{tool}(mode = "{setting["mode"]}"'
+            if "version" in setting:
+                call += f', version = "{setting["version"]}"'
+            module, count = re.subn(
+                rf'foreign_cc_tools\.{re.escape(tool)}\([^)]*\)', call + ")", module)
+            if count != 1:
+                raise RuntimeError(f"expected one {tool} tool mode, found {count}")
+        (tree / "MODULE.bazel").write_text(module)
     return tree
 def runner_metadata():
     memory = None
@@ -334,48 +370,40 @@ def runner_metadata():
 def requested_download_outputs(engine, scenario):
     if engine != "bazel":
         return None
-    return "all" if scenario == "cold" else "toplevel"
+    return "toplevel"
 
 
 def requested_bazel_jobs(engine, scenario):
     if engine != "bazel":
         return None
+    if os.environ.get("APK_ARM") not in ("src", "prebuilt"):
+        raise RuntimeError("APK_ARM must be src or prebuilt")
     jobs = os.environ.get("APK_BAZEL_JOBS")
-    if scenario == "cold":
-        if jobs != "default":
-            raise RuntimeError("cold seed requires APK_BAZEL_JOBS=default")
-    elif jobs not in ("4", "128"):
-        raise RuntimeError("APK_BAZEL_JOBS must be 4 or 128 for readers")
+    if jobs != "128":
+        raise RuntimeError("all host-tool rows require APK_BAZEL_JOBS=128")
     return jobs
 
 
 def proof_identity(identity):
-    run, attempt, head = (identity[key] for key in ("run_id", "attempt", "head"))
+    run, attempt, head, arm = (identity[key] for key in ("run_id", "attempt", "head", "arm"))
     if not (re.fullmatch(r"[0-9]+", run) and re.fullmatch(r"[0-9]+", attempt)
-            and re.fullmatch(r"[0-9a-f]{40}", head)):
-        raise RuntimeError("APK proof requires exact run, attempt and commit identity")
-    return f"{run}/{attempt}/{head}"
+            and re.fullmatch(r"[0-9a-f]{40}", head) and arm in ("src", "prebuilt")):
+        raise RuntimeError("APK proof requires exact run, attempt, commit and arm identity")
+    return f"{run}/{attempt}/{head}/{arm}"
 
 
 def policy_references(identity, env):
     prefix = proof_identity(identity)
     scenario = identity["scenario"]
-    references = {}
-    for key, name, predecessor, required in (
-        ("seed_sha256", "APK_SEED_PROOF", "cold", scenario != "cold"),
-        ("edit_sha256", "APK_EDIT_PROOF", "lib",
-         scenario == "lib" and identity["bazel_jobs"] == "4"),
-    ):
-        proof = env.get(name, "")
-        if not required:
-            if proof:
-                raise RuntimeError(f"unexpected {name} for this APK policy row")
-            continue
-        match = re.fullmatch(prefix + f"/{predecessor}/([0-9a-f]{{64}})", proof)
-        if not match:
-            raise RuntimeError(f"{name} is absent, malformed or from the wrong run or scenario")
-        references[key] = match[1]
-    return references
+    if scenario == "cold":
+        if env.get("APK_SEED_PROOF"):
+            raise RuntimeError("unexpected APK_SEED_PROOF for a cold row")
+        return {}
+    proof = env.get("APK_SEED_PROOF", "")
+    match = re.fullmatch(prefix + r"/cold/([0-9a-f]{64})", proof)
+    if not match:
+        raise RuntimeError("APK_SEED_PROOF is absent, malformed or from the wrong run, attempt, arm or scenario")
+    return {"seed_sha256": match[1]}
 
 
 def require_policy_apk(scenario, references, apk_sha256):
@@ -398,13 +426,16 @@ def cmd_prepare(args):
     ROOT.mkdir(parents=True, exist_ok=True)
     head = dispatch_head()
     manifest = verify_frozen()
-    tree = tracked_tree(args.engine)
+    arm = os.environ.get("APK_ARM")
+    if arm not in ("src", "prebuilt"):
+        raise RuntimeError("APK_ARM must be src or prebuilt")
+    tree = tracked_tree(args.engine, arm)
     verify_frozen(tree)
     state = {"schema": 1, "kind": "smooth-current-debug-apk-timing", "status": "prepared",
              "identity": {"head": head, "run_id": os.environ.get("GITHUB_RUN_ID", ""),
                           "workload_head": WORKLOAD_HEAD,
                           "attempt": os.environ.get("GITHUB_RUN_ATTEMPT", ""),
-                          "engine": args.engine, "scenario": args.scenario,
+                          "engine": args.engine, "scenario": args.scenario, "arm": arm,
                           "download_outputs": download_outputs, "bazel_jobs": bazel_jobs,
                           "workflow_start_epoch": None,
                           "inputs_sha256": digest(json.dumps(manifest["inputs"], sort_keys=True).encode()),
@@ -414,7 +445,7 @@ def cmd_prepare(args):
              "runner": runner_metadata(),
              "build_config": {"target": APK_TARGET, "stock_target": ENTRYPOINT, "abi": "x86_64",
                               "mode": "debug", "bazel_configuration": "fastbuild",
-                              "bazel_jobs": bazel_jobs,
+                              "bazel_jobs": bazel_jobs, "arm": arm,
                               "compile_sdk": 36, "build_tools": "36.0.0", "ndk": "28.2.13676358",
                               "java": 17, "lockfile_mode": "error"},
              "phases": [], "commands": [], "errors": [],
@@ -461,10 +492,11 @@ def run_remote_config(state):
     if "://" in host or "/" in host:
         raise RuntimeError("remote cache host must contain no scheme/path")
     identity_values = [state["identity"][k] for k in ("run_id", "attempt", "head")]
+    arm = state["identity"].get("arm")
     if not (re.fullmatch(r"[0-9]+", identity_values[0]) and re.fullmatch(r"[0-9]+", identity_values[1])
-            and re.fullmatch(r"[0-9a-f]{40}", identity_values[2])):
-        raise RuntimeError("remote salt requires numeric run/attempt and exact 40-hex head")
-    salt = "/".join(identity_values)
+            and re.fullmatch(r"[0-9a-f]{40}", identity_values[2]) and arm in ("src", "prebuilt")):
+        raise RuntimeError("remote salt requires numeric run/attempt, exact head and arm")
+    salt = "/".join(identity_values + [arm])
     rc = ROOT / "remote-cache.bazelrc"
     rc_text = "".join("build " + shlex.quote(x) + "\n" for x in (
         "--remote_cache=grpcs://" + host, "--remote_instance_name=" + project,
@@ -494,6 +526,7 @@ def bazel_argv(root, command_name, env, *, bep=None, remote=True, extra=()):
         args.append("--bazelrc=" + str(rc))
     args.append(command_name)
     args.append("--disk_cache=")
+    args.append("--downloader_config=" + str(WS / "ci/apk/maven-downloader.cfg"))
     if not remote:
         args.append("--remote_cache=")
     args += ["--repository_cache=" + str(ROOT / "repository-cache"),
@@ -503,8 +536,9 @@ def bazel_argv(root, command_name, env, *, bep=None, remote=True, extra=()):
              "-c", "fastbuild", "--merge_android_manifest_permissions", "--tool_java_language_version=17",
              "--tool_java_runtime_version=remotejdk_17", "--java_language_version=17",
              "--java_runtime_version=remotejdk_17", "--desugar_java8_libs", "--color=no", "--curses=no",
-             *(["--jobs=" + _ACTIVE_STATE["identity"]["bazel_jobs"]]
-               if _ACTIVE_STATE["identity"]["bazel_jobs"] in ("4", "128") else []),
+             "--jobs=128", "--experimental_record_metrics_for_all_mnemonics",
+             *(["--@@protobuf+//bazel/toolchains:prefer_prebuilt_protoc"]
+               if _ACTIVE_STATE["identity"]["arm"] == "prebuilt" else []),
              *extra]
     if remote:
         policy = _ACTIVE_STATE["remote_cache"]
@@ -516,7 +550,7 @@ def bazel_argv(root, command_name, env, *, bep=None, remote=True, extra=()):
     if bep:
         args.append("--build_event_json_file=" + str(bep))
     args.append("--lockfile_mode=error")
-    args.append(APK_TARGET)
+    args.append("deps(" + APK_TARGET + ")" if command_name == "aquery" else APK_TARGET)
     return args
 
 
@@ -642,6 +676,7 @@ def collect_profile(path):
         if not isinstance(events, list):
             return {"status": "invalid"}
         phase_markers, action_spans, mnemonics = [], [], {}
+        action_start, action_end = None, None
         remote_categories = {key: {"event_count": 0, "max_event_span_seconds": 0.0}
                              for key in sorted(REMOTE_PROFILE_CATEGORIES)}
         fetch_spans, download_spans = [], []
@@ -677,6 +712,8 @@ def collect_profile(path):
                 args = event.get("args") if isinstance(event.get("args"), dict) else {}
                 action_count += 1
                 action_duration += float(duration)
+                action_start = float(ts) if action_start is None else min(action_start, float(ts))
+                action_end = float(ts + duration) if action_end is None else max(action_end, float(ts + duration))
                 action_spans.extend(((float(ts), 1), (float(ts + duration), -1)))
                 mnemonic = args.get("mnemonic")
                 if isinstance(mnemonic, str) and re.fullmatch(r"[A-Za-z0-9_]{1,80}", mnemonic):
@@ -699,7 +736,16 @@ def collect_profile(path):
             download_union += max(0.0, end - max(start, download_end))
             download_end = max(download_end, end)
         remote_categories["remote output download"]["union_seconds"] = round(download_union / 1_000_000, 6)
+        launch = next((ts for ts, name in phase_markers if name == "Launch Blaze"), None)
+        command_phase_seconds = None
+        if launch is not None and action_start is not None and action_end is not None:
+            command_phase_seconds = {
+                "pre": round(max(0.0, action_start - launch) / 1_000_000, 6),
+                "exec": round(max(0.0, action_end - action_start) / 1_000_000, 6),
+                "tail": round(max(0.0, profile_end - action_end) / 1_000_000, 6),
+            }
         return {
+            "command_pre_exec_tail_seconds": command_phase_seconds,
             "status": "available",
             "schema": "Bazel 9.2 traceEvents: build phase marker instant events; action and remote spans ph=X",
             "build_phase_markers": phase_rows,
@@ -728,15 +774,20 @@ def final_critical_path(build_log):
         return {"status": "unavailable"}
     return {"status": "available", "seconds": float(matches[-1]), "source": "final Bazel INFO summary"}
 
+
 def collect_bep(path, build_log):
-    counts = {"events": 0, "actions_completed": 0, "actions_failed": 0, "mnemonics": {}}
+    counts = {"events": 0, "actions_completed": 0, "actions_failed": 0,
+              "action_completed_mnemonics": {}, "mnemonics": {}}
     summary = re.findall(r"(?m)^INFO: (\d+) process(?:es)?: ([^\r\n]+)", build_log)
     if summary:
         total, breakdown = summary[-1]
         hits = re.search(r"\b(\d+) remote cache hits?\b", breakdown)
-        counts["process_summary"] = {"total": int(total)}
-        if hits:
-            counts["process_summary"]["remote_cache_hits"] = int(hits[1])
+        internal = re.search(r"\b(\d+) internal\b", breakdown)
+        counts["process_summary"] = {
+            "total": int(total),
+            "remote_cache_hits": int(hits[1]) if hits else 0,
+            "internal": int(internal[1]) if internal else 0,
+        }
     try:
         with path.open(encoding="utf-8", errors="replace") as stream:
             for line in stream:
@@ -755,17 +806,26 @@ def collect_bep(path, build_log):
                         counts["actions_completed"] += 1
                         counts["actions_failed"] += completed.get("success") is False
                         mnemonic = completed.get("mnemonic") or "unknown"
-                        counts["mnemonics"][mnemonic] = counts["mnemonics"].get(mnemonic, 0) + 1
+                        counts["action_completed_mnemonics"][mnemonic] = (
+                            counts["action_completed_mnemonics"].get(mnemonic, 0) + 1)
                     metrics = event.get("buildMetrics")
                     if metrics:
+                        action_summary = metrics.get("actionSummary") or {}
+                        data = action_summary.get("actionData") or []
+                        counts["mnemonics"] = {
+                            item["mnemonic"]: int(item.get("actionsExecuted", 0))
+                            for item in data
+                            if item.get("mnemonic")
+                            and str(item.get("actionsExecuted", "0")).isdigit()
+                        }
                         counts["build_metrics"] = {
-                            "action_summary": metrics.get("actionSummary"),
+                            "action_summary": action_summary,
                             "target_count": metrics.get("targetCount"),
                         }
     finally:
         path.unlink(missing_ok=True)
     if not counts["events"]:
-        raise RuntimeError("Bazel build-event stream contained no events")
+        raise RuntimeError("Bazel build-event stream is empty")
     counts["mnemonics"] = dict(sorted(counts["mnemonics"].items()))
     return counts
 
@@ -781,10 +841,12 @@ def cmd_run(args):
     head = dispatch_head()
     if ident["head"] != head:
         raise RuntimeError("checkout HEAD/GITHUB_SHA identity changed")
+    if ident.get("arm") != os.environ.get("APK_ARM"):
+        raise RuntimeError("APK_ARM differs from prepared identity")
     mode = requested_download_outputs(args.engine, args.scenario)
     jobs = requested_bazel_jobs(args.engine, args.scenario)
     if ident.get("download_outputs") != mode or ident.get("bazel_jobs") != jobs:
-        raise RuntimeError("download mode or Bazel jobs differs from prepared identity")
+        raise RuntimeError("download mode or jobs differs from prepared identity")
     references = policy_references(ident, os.environ) if mode else {}
     if mode and references != state.get("output_policy"):
         raise RuntimeError("APK digest references differ from prepared identity")
@@ -833,19 +895,24 @@ def cmd_run(args):
                 )
             if not bep.is_file():
                 raise RuntimeError("Bazel did not produce required build event stream")
-            query = command(state, "bazel-apk-output", bazel_argv(tree, "cquery", env, extra=("--output=files",)), tree, env, timeout=300)
+            query = command(state, "bazel-apk-output",
+                            bazel_argv(tree, "cquery", env, extra=("--output=files",)),
+                            tree, env, timeout=300)
             apk_name = APK_TARGET.rsplit(":", 1)[1] + ".apk"
-            apks = [line.strip() for line in query.splitlines() if Path(line.strip()).name == apk_name]
+            apks = [line.strip() for line in query.splitlines()
+                    if Path(line.strip()).name == apk_name]
             if len(apks) != 1:
                 raise RuntimeError(f"expected one public APK output, found {len(apks)}")
-            state["bazel_apk"] = apks[0] if Path(apks[0]).is_absolute() else str(tree / apks[0])
+            state["bazel_apk"] = (
+                apks[0] if Path(apks[0]).is_absolute() else str(tree / apks[0]))
         with phase(state, "artifact-validation"):
             validate_apk(args.engine, tree, args.scenario, state)
             if mode:
                 require_policy_apk(args.scenario, references, state["artifact"]["sha256"])
                 state["output_policy"]["passed"] = True
         state["required_result_epoch"] = time.time()
-        state["required_result_duration_seconds"] = round(state["required_result_epoch"] - required_start, 6)
+        state["required_result_duration_seconds"] = round(
+            state["required_result_epoch"] - required_start, 6)
         if args.engine == "bazel":
             state["bazel_profile"] = collect_profile(profile_path)
             state["bazel_profile"]["raw_trace_cleanup"] = "removed" if not profile_path.exists() else "failed"
@@ -853,10 +920,63 @@ def cmd_run(args):
             save(state)
             if state["bazel_profile"]["raw_trace_cleanup"] != "removed":
                 raise RuntimeError("temporary Bazel profile cleanup failed")
-            with phase(state, "bep-metrics-post-result"):
-                state["bep_metrics"] = collect_bep(bep, build_log)
+            state["bep_metrics"] = collect_bep(bep, build_log)
+            summary = state["bep_metrics"].get("process_summary", {})
+            if not isinstance(summary.get("total"), int) or isinstance(summary.get("total"), bool):
+                raise RuntimeError("Bazel process summary is missing an integer process count")
+            state["process_summary"] = {
+                "processes": summary.get("total"),
+                "remote_cache_hits": summary.get("remote_cache_hits", 0),
+                "internal": summary.get("internal", 0),
+            }
+            build_row = next((row for row in reversed(state.get("commands", []))
+                              if row.get("name") == "bazel-build-apk"), {})
+            state["network_429_urls"] = build_row.get("network_429_urls", [])
+            state["network_429_count"] = build_row.get("network_429_count", 0)
+            with phase(state, "protoc-action-graph-post-result"):
+                compile_graph = command(
+                    state, "bazel-compile-action-graph",
+                    bazel_argv(tree, "aquery", env,
+                               extra=("--output=text", "--include_commandline",
+                                      "--toolchain_resolution_debug=.*proto.*")),
+                    tree, env, timeout=300,
+                )
+            actions = re.findall(r"(?ms)^action .*?:.*?(?=^action .*?:|\Z)", compile_graph)
+            compile_actions = [a for a in actions if "Mnemonic: CppCompile" in a]
+            link_actions = [a for a in actions if "Mnemonic: CppLink" in a]
+            proto_actions = [a for a in actions if "Mnemonic: ProtoCompile" in a]
+            protobuf_compiles = [a for a in compile_actions if "protoc" in a.lower()]
+            protobuf_links = [a for a in link_actions if "protoc" in a.lower()]
+            selected_proto_toolchains = []
+            for line in compile_graph.splitlines():
+                match = re.search(
+                    r"type @@protobuf\+//bazel/private:proto_toolchain_type -> toolchain (\S+)",
+                    line,
+                )
+                if match:
+                    selected_proto_toolchains.append(match.group(1))
+            state["protoc_selection"] = {
+                "prefer_prebuilt_protoc_flag": os.environ.get("APK_ARM") == "prebuilt",
+                "selected_proto_toolchain": selected_proto_toolchains[-1] if selected_proto_toolchains else None,
+                "prebuilt_protoc_selected": any("prebuilt_protoc." in label for label in selected_proto_toolchains),
+                "action_count": len(actions),
+                "proto_compile_action_count": len(proto_actions),
+                "prebuilt_protoc_proto_compile_action_count": sum(
+                    "prebuilt_protoc" in action.lower() for action in proto_actions),
+                "cpp_compile_action_count": len(compile_actions),
+                "cpp_link_action_count": len(link_actions),
+                "protobuf_cpp_compile_action_count": len(protobuf_compiles),
+                "protobuf_cpp_link_action_count": len(protobuf_links),
+                "protobuf_cpp_compile_actions": protobuf_compiles,
+                "protobuf_cpp_link_actions": protobuf_links,
+            }
         state["status"] = "passed"
     except BaseException as exc:
+        if args.engine == "bazel":
+            build_row = next((row for row in reversed(state.get("commands", []))
+                              if row.get("name") == "bazel-build-apk"), {})
+            state["network_429_urls"] = build_row.get("network_429_urls", [])
+            state["network_429_count"] = build_row.get("network_429_count", 0)
         if args.engine == "bazel" and profile_path is not None:
             state["bazel_profile"] = collect_profile(profile_path)
             state["bazel_profile"]["raw_trace_cleanup"] = "removed" if not profile_path.exists() else "failed"
@@ -905,7 +1025,8 @@ def cmd_emit(args):
                               "run_id": os.environ.get("GITHUB_RUN_ID", ""),
                               "attempt": os.environ.get("GITHUB_RUN_ATTEMPT", ""),
                               "engine": args.engine, "scenario": args.scenario,
-                              "download_outputs": None if args.engine != "bazel" else ("all" if args.scenario == "cold" else "toplevel"),
+                              "arm": os.environ.get("APK_ARM") if args.engine == "bazel" else None,
+                              "download_outputs": None if args.engine != "bazel" else "toplevel",
                               "bazel_jobs": os.environ.get("APK_BAZEL_JOBS")},
                  "phases": [], "commands": [], "errors": []}
     for sidecar in (ROOT / "cache.json", ROOT / "workflow-clock.json"):
@@ -969,7 +1090,7 @@ def cmd_verify(_args):
            or str(op.get("run_attempt")) != str(ident.get("attempt")) or op.get("engine") != ident.get("engine")
            or op.get("scenario") != ident.get("scenario") for op in operations):
         issues.append("cache operation provenance mismatch")
-    cold_key = f"apk-current-{ident.get('run_id')}-{ident.get('attempt')}-{ident.get('head')}-{ident.get('engine')}-cold"
+    cold_key = f"apk-current-{ident.get('run_id')}-{ident.get('attempt')}-{ident.get('head')}-{ident.get('engine')}-{ident.get('arm')}-cold"
     if ident.get("scenario") != "cold":
         if clock.get("cache_hit") is not True or clock.get("cache_matched_key") != cold_key or clock.get("cache_expected_key") != cold_key:
             issues.append("exact cache restore hit/provenance missing")
@@ -982,7 +1103,12 @@ def cmd_verify(_args):
         issues.append("cache pack status does not match expected publication")
     if expected_pack_status == "ok" and packed:
         suffix = "cold" if ident.get("scenario") == "cold" else "lib"
-        expected_key = f"apk-current-{ident.get('run_id')}-{ident.get('attempt')}-{ident.get('head')}-{ident.get('engine')}-{suffix}"
+        middle = (f"{ident.get('engine')}-{ident.get('arm')}"
+                  if ident.get("engine") == "bazel" else ident.get("engine"))
+        expected_key = (
+            f"apk-current-{ident.get('run_id')}-{ident.get('attempt')}-"
+            f"{ident.get('head')}-{middle}-{suffix}"
+        )
         if packed[-1].get("key") != expected_key:
             issues.append("cache publication key mismatch")
         published = clock.get("published_cache")

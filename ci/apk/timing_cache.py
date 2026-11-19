@@ -42,7 +42,8 @@ class CacheError(Exception):
 
 def ancestor_identity(engine):
     return ":".join((required_env("GITHUB_SHA"), required_env("GITHUB_RUN_ID"),
-                     required_env("GITHUB_RUN_ATTEMPT"), engine, "cold"))
+                     required_env("GITHUB_RUN_ATTEMPT"), engine,
+                     required_env("APK_ARM"), "cold"))
 
 def required_env(key):
     value = os.environ.get(key, "")
@@ -128,10 +129,12 @@ class GuardedReader:
 
 def key(engine, scenario):
     suffix = "lib" if engine == "stock" and scenario in ("warm", "lib") else "cold"
-    return f"apk-current-{required_env('GITHUB_RUN_ID')}-{required_env('GITHUB_RUN_ATTEMPT')}-{required_env('GITHUB_SHA')}-{engine}-{suffix}"
+    arm = required_env("APK_ARM") if engine == "bazel" else ""
+    middle = f"{engine}-{arm}" if arm else engine
+    return f"apk-current-{required_env('GITHUB_RUN_ID')}-{required_env('GITHUB_RUN_ATTEMPT')}-{required_env('GITHUB_SHA')}-{middle}-{suffix}"
 
 def identity(engine, scenario):
-    return {"schema": 1, "engine": engine, "scenario": scenario, "head": required_env("GITHUB_SHA"), "run_id": required_env("GITHUB_RUN_ID"), "run_attempt": required_env("GITHUB_RUN_ATTEMPT"), "ancestor": "cold" if scenario in ("warm", "lib") else "self"}
+    return {"schema": 1, "engine": engine, "scenario": scenario, "head": required_env("GITHUB_SHA"), "run_id": required_env("GITHUB_RUN_ID"), "run_attempt": required_env("GITHUB_RUN_ATTEMPT"), "arm": required_env("APK_ARM") if engine == "bazel" else None, "ancestor": "cold" if scenario in ("warm", "lib") else "self"}
 
 def outputs(upload, cache_path, cache_key):
     text = f"upload={'true' if upload else 'false'}\npath={cache_path}\nkey={cache_key}\n"
@@ -345,7 +348,7 @@ def restore(engine, scenario, op):
     comps=meta.get("components")
     if not isinstance(comps,list) or len(comps)!=1: raise CacheError("invalid component list")
     c=comps[0]; expected=[r for r,_,_ in roots]
-    if (set(meta)!={"schema","engine","scenario","head","run_id","run_attempt","ancestor","kind","cap_bytes","headroom_bytes","ancestor_identity","archive_bytes","components"}
+    if (set(meta)!={"schema","engine","scenario","head","run_id","run_attempt","arm","ancestor","kind","cap_bytes","headroom_bytes","ancestor_identity","archive_bytes","components"}
             or meta.get("kind")!="cold" or c.get("name")!=f"{engine}-cold"
             or set(c)!={"name","file","base","roots","archive_bytes","archive_sha256","raw_bytes","entries"}
             or c.get("base")!="tree" or [r.get("path") for r in c.get("roots",[]) ]!=expected):
