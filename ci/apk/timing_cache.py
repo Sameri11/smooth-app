@@ -42,8 +42,7 @@ class CacheError(Exception):
 
 def ancestor_identity(engine):
     return ":".join((required_env("GITHUB_SHA"), required_env("GITHUB_RUN_ID"),
-                     required_env("GITHUB_RUN_ATTEMPT"), engine,
-                     required_env("APK_ARM"), "cold"))
+                     required_env("GITHUB_RUN_ATTEMPT"), engine, "cold"))
 
 def required_env(key):
     value = os.environ.get(key, "")
@@ -128,10 +127,7 @@ class GuardedReader:
         out, self.buf = self.buf[:n], self.buf[n:]; return out
 
 def key(engine, scenario):
-    suffix = "lib" if engine == "stock" and scenario in ("warm", "lib") else "cold"
-    arm = required_env("APK_ARM") if engine == "bazel" else ""
-    middle = f"{engine}-{arm}" if arm else engine
-    return f"apk-current-{required_env('GITHUB_RUN_ID')}-{required_env('GITHUB_RUN_ATTEMPT')}-{required_env('GITHUB_SHA')}-{middle}-{suffix}"
+    return f"apk-current-{required_env('GITHUB_RUN_ID')}-{required_env('GITHUB_RUN_ATTEMPT')}-{required_env('GITHUB_SHA')}-{engine}-cold"
 
 def identity(engine, scenario):
     return {"schema": 1, "engine": engine, "scenario": scenario, "head": required_env("GITHUB_SHA"), "run_id": required_env("GITHUB_RUN_ID"), "run_attempt": required_env("GITHUB_RUN_ATTEMPT"), "arm": required_env("APK_ARM") if engine == "bazel" else None, "ancestor": "cold" if scenario in ("warm", "lib") else "self"}

@@ -32,7 +32,7 @@ SDK = Path(os.environ.get("RUNNER_TEMP", tempfile.gettempdir())) / "flutter"
 PUB = Path(os.environ.get("RUNNER_TEMP", tempfile.gettempdir())) / "cache-state" / "pub"
 BAZELISK = Path(os.environ.get("RUNNER_TEMP", tempfile.gettempdir())) / "cache-state" / "bazelisk"
 WORKLOAD_HEAD = "6e7408fda8e46bc97a0d8f2b33a801cf27c8dabe"
-PREVIOUS_HARNESS_HEAD = "ee046447ef1c36c92f0e8a8c391d77a4938794d9"
+PREVIOUS_HARNESS_HEAD = "e8da5ba5c3e8ca432006fedfb9a52e5477cddbb2"
 HARNESS_FILES = {
     ".github/workflows/ci-apk-timing.yml", "ci/apk/timing.py", "ci/apk/timing_cache.py",
     "ci/apk/maven-downloader.cfg", "MODULE.bazel", "ci/apk/arms/prebuilt.json", "ci/apk/arms/src.json",
@@ -491,12 +491,13 @@ def run_remote_config(state):
     host, project, token = values
     if "://" in host or "/" in host:
         raise RuntimeError("remote cache host must contain no scheme/path")
-    identity_values = [state["identity"][k] for k in ("run_id", "attempt", "head")]
-    arm = state["identity"].get("arm")
-    if not (re.fullmatch(r"[0-9]+", identity_values[0]) and re.fullmatch(r"[0-9]+", identity_values[1])
-            and re.fullmatch(r"[0-9a-f]{40}", identity_values[2]) and arm in ("src", "prebuilt")):
-        raise RuntimeError("remote salt requires numeric run/attempt, exact head and arm")
-    salt = "/".join(identity_values + [arm])
+    identity_values = [state["identity"][key] for key in ("run_id", "attempt", "head")]
+    if (not re.fullmatch(r"[0-9]+", identity_values[0])
+            or not re.fullmatch(r"[0-9]+", identity_values[1])
+            or not re.fullmatch(r"[0-9a-f]{40}", identity_values[2])
+            or state["identity"].get("arm") != "prebuilt"):
+        raise RuntimeError("remote salt requires numeric run/attempt, exact head and the prebuilt arm")
+    salt = "/".join(identity_values)
     rc = ROOT / "remote-cache.bazelrc"
     rc_text = "".join("build " + shlex.quote(x) + "\n" for x in (
         "--remote_cache=grpcs://" + host, "--remote_instance_name=" + project,
@@ -529,7 +530,7 @@ def bazel_argv(root, command_name, env, *, bep=None, remote=True, extra=()):
     args.append("--downloader_config=" + str(WS / "ci/apk/maven-downloader.cfg"))
     if not remote:
         args.append("--remote_cache=")
-    args += ["--repository_cache=" + str(ROOT / "repository-cache"),
+    args += ["--repository_cache=" + str(repository_cache_path()),
              "--repo_env=FLUTTER_ROOT=" + str(SDK), "--repo_env=ANDROID_HOME=" + env["ANDROID_HOME"],
              "--repo_env=ANDROID_NDK_HOME=" + env["ANDROID_NDK_HOME"],
              "--android_platforms=@rules_android//:x86_64", "--@rules_flutter_core//flutter:mode=debug",
@@ -661,6 +662,34 @@ def ensure_sdk_tools(state, env):
         raise RuntimeError("flutter_tools locked preparation did not preserve lock/write package config")
 
 
+def repository_cache_inventory(path):
+    result = {}
+    for name in ("content_addressable", "contents"):
+        root = path / name
+        files = 0
+        byte_count = 0
+        if root.is_dir():
+            for item in root.rglob("*"):
+                try:
+                    if item.is_file():
+                        files += 1
+                        byte_count += item.stat().st_size
+                except OSError:
+                    raise RuntimeError(f"repository cache changed during inventory: {item}")
+        result[name] = {"files": files, "bytes": byte_count}
+    return result
+
+def repository_cache_scope(full_compressed_bytes, downloads_compressed_bytes, cap_bytes=3 * (1 << 30)):
+    if full_compressed_bytes <= cap_bytes:
+        return "full", full_compressed_bytes
+    if downloads_compressed_bytes <= cap_bytes:
+        return "downloads", downloads_compressed_bytes
+    return "skipped", None
+
+def repository_cache_path():
+    name = "repository-cache-transported" if os.environ.get("APK_REPO_MODE") == "R1" else "repository-cache"
+    return ROOT / name
+
 def collect_profile(path):
     try:
         if not path.is_file():
@@ -679,7 +708,7 @@ def collect_profile(path):
         action_start, action_end = None, None
         remote_categories = {key: {"event_count": 0, "max_event_span_seconds": 0.0}
                              for key in sorted(REMOTE_PROFILE_CATEGORIES)}
-        fetch_spans, download_spans = [], []
+        fetch_spans, download_spans, fetch_by_repository = [], [], {}
         action_duration = 0.0
         action_count = 0
         profile_end = max((event["ts"] + event.get("dur", 0)
@@ -706,6 +735,14 @@ def collect_profile(path):
                     remote_categories[category]["max_event_span_seconds"], span)
             if category == "Fetching repository":
                 fetch_spans.append((float(ts), float(ts + duration)))
+                args = event.get("args") if isinstance(event.get("args"), dict) else {}
+                repository = next((args.get(key) for key in
+                                   ("repository", "repository_name", "repositoryName", "repo")
+                                   if isinstance(args.get(key), str) and args.get(key)), None)
+                if repository is None:
+                    repository = name if isinstance(name, str) and name else "unknown"
+                bucket = fetch_by_repository.setdefault(repository, [])
+                bucket.append((float(ts), float(ts + duration)))
             elif category == "remote output download":
                 download_spans.append((float(ts), float(ts + duration)))
             if category == "action processing":
@@ -726,11 +763,21 @@ def collect_profile(path):
         for _, change in sorted(action_spans, key=lambda item: (item[0], item[1])):
             concurrent += change
             peak_concurrent = max(peak_concurrent, concurrent)
-        fetch_end = fetch_union = 0.0
-        for start, end in sorted(fetch_spans):
-            fetch_union += max(0.0, end - max(start, fetch_end))
-            fetch_end = max(fetch_end, end)
-        remote_categories["Fetching repository"]["union_seconds"] = round(fetch_union / 1_000_000, 6)
+        def union_seconds(spans):
+            end = union = 0.0
+            for start, finish in sorted(spans):
+                union += max(0.0, finish - max(start, end))
+                end = max(end, finish)
+            return union / 1_000_000
+        fetch_union = union_seconds(fetch_spans)
+        repository_fetches = []
+        for repository, spans in fetch_by_repository.items():
+            repository_fetches.append({
+                "repository": repository,
+                "event_count": len(spans),
+                "union_seconds": round(union_seconds(spans), 6),
+            })
+        repository_fetches.sort(key=lambda row: (-row["union_seconds"], row["repository"]))
         download_end = download_union = 0.0
         for start, end in sorted(download_spans):
             download_union += max(0.0, end - max(start, download_end))
@@ -750,9 +797,9 @@ def collect_profile(path):
             "schema": "Bazel 9.2 traceEvents: build phase marker instant events; action and remote spans ph=X",
             "build_phase_markers": phase_rows,
             "build_phase_marker_event_count": len(phase_rows),
-            "repository_fetch": {"event_count": remote_categories["Fetching repository"]["event_count"],
-                                "union_seconds": round(fetch_union / 1_000_000, 6),
-                                "category": "Fetching repository"},
+            "repository_fetch_top": repository_fetches[:30],
+            "repository_fetch_count": len(fetch_spans),
+            "repository_fetch_union_seconds": round(fetch_union, 6),
             "action_event_count": action_count,
             "action_concurrency_peak": peak_concurrent,
             "action_duration_sum_seconds": round(action_duration / 1_000_000, 6),
@@ -868,6 +915,9 @@ def cmd_run(args):
     clock_path = ROOT / "workflow-clock.json"
     clock = json.loads(clock_path.read_text()) if clock_path.is_file() else {}
     required_start = float(clock.get("job_start_epoch", time.time()))
+    state["repository_cache_mode"] = os.environ.get("APK_REPO_MODE", "seed")
+    state["repeat"] = os.environ.get("APK_REPEAT")
+    state["repository_cache_restore_seconds"] = clock.get("repository_cache_restore_seconds", 0)
     try:
         with phase(state, "verify-tool-identities"):
             verify_tool_identity(args.engine, tree, state, env)
@@ -886,6 +936,8 @@ def cmd_run(args):
             profile_path = ROOT / "logs" / "bazel-profile.json"
             bep.unlink(missing_ok=True)
             profile_path.unlink(missing_ok=True)
+            repo_cache = repository_cache_path()
+            state["repository_cache_before"] = repository_cache_inventory(repo_cache)
             with phase(state, "bazel-debug-apk-build"):
                 build_log = command(
                     state, "bazel-build-apk",
@@ -893,6 +945,7 @@ def cmd_run(args):
                                extra=("--profile=" + str(profile_path), "--worker_quit_after_build")),
                     tree, env, timeout=3300, sample_resources=True,
                 )
+            state["repository_cache_after"] = repository_cache_inventory(repo_cache)
             if not bep.is_file():
                 raise RuntimeError("Bazel did not produce required build event stream")
             query = command(state, "bazel-apk-output",
@@ -1032,7 +1085,15 @@ def cmd_emit(args):
     for sidecar in (ROOT / "cache.json", ROOT / "workflow-clock.json"):
         if sidecar.is_file():
             try:
-                state["cache_metrics" if sidecar.name == "cache.json" else "workflow_clock"] = json.loads(sidecar.read_text())
+                key = "cache_metrics" if sidecar.name == "cache.json" else "workflow_clock"
+                state[key] = json.loads(sidecar.read_text())
+                if key == "workflow_clock":
+                    sizes = state[key].get("repository_cache_sizes")
+                    if not sizes and os.environ.get("APK_REPO_CACHE_SIZES"):
+                        sizes = json.loads(os.environ["APK_REPO_CACHE_SIZES"])
+                    state["r1_scope"] = state[key].get("r1_scope", os.environ.get("APK_REPO_SCOPE"))
+                    state["repository_cache_sizes"] = sizes
+                    state["r1_skip_reason"] = state[key].get("repository_cache_skip_reason", os.environ.get("APK_REPO_SKIP_REASON"))
             except Exception as exc:
                 state.setdefault("errors", []).append({"sidecar": sidecar.name, "error": str(exc)[:300]})
     state["workflow_job_status"] = os.environ.get("APK_TIMING_JOB_STATUS", "")
@@ -1050,11 +1111,45 @@ def cmd_emit(args):
     print("APK_TIMING_META " + json.dumps({"encoding": "gzip+base64", "chunks": len(chunks), "sha256": digest(raw)}, separators=(",", ":")))
     for i, chunk in enumerate(chunks, 1):
         print(f"APK_TIMING_CHUNK {i}/{len(chunks)} {chunk}")
+
+def cmd_skip(args):
+    state = state_load()
+    ident = state.get("identity", {})
+    if state.get("status") != "prepared" or ident.get("engine") != args.engine or ident.get("scenario") != args.scenario:
+        raise RuntimeError("cannot skip an unprepared or mismatched timing row")
+    if os.environ.get("APK_REPO_MODE") != "R1" or os.environ.get("APK_REPO_SCOPE") != "skipped":
+        raise RuntimeError("repository-cache skip is not authorized by the seed")
+    reason = args.reason.strip()
+    if not reason:
+        raise RuntimeError("repository-cache skip reason is missing")
+    clock_path = ROOT / "workflow-clock.json"
+    clock = json.loads(clock_path.read_text()) if clock_path.is_file() else {}
+    state.update(status="skipped", r1_scope="skipped", r1_skip_reason=reason,
+                 repository_cache_mode="R1", repeat=os.environ.get("APK_REPEAT"),
+                 repository_cache_restore_seconds=0, workflow_clock=clock,
+                 repository_cache_sizes=clock.get("repository_cache_sizes"))
+    save(state)
+    print(json.dumps({"status": "skipped", "r1_scope": "skipped", "reason": reason}))
     return 0
+
+
 
 
 def cmd_verify(_args):
     state = state_load()
+    if state.get("status") == "skipped":
+        valid = (os.environ.get("APK_TIMING_JOB_STATUS") == "success"
+                 and os.environ.get("APK_REPO_MODE") == "R1"
+                 and os.environ.get("APK_REPO_SCOPE") == "skipped"
+                 and state.get("r1_scope") == "skipped"
+                 and bool(state.get("r1_skip_reason"))
+                 and state.get("identity", {}).get("head") == dispatch_head()
+                 and state.get("identity", {}).get("engine") == _args.engine
+                 and state.get("identity", {}).get("scenario") == _args.scenario)
+        print(json.dumps({"status": "skipped" if valid else "failed",
+                          "r1_scope": state.get("r1_scope"),
+                          "reason": state.get("r1_skip_reason")}))
+        return 0 if valid else 1
     issues = []
     head = dispatch_head()
     if state.get("status") != "passed":
@@ -1090,7 +1185,7 @@ def cmd_verify(_args):
            or str(op.get("run_attempt")) != str(ident.get("attempt")) or op.get("engine") != ident.get("engine")
            or op.get("scenario") != ident.get("scenario") for op in operations):
         issues.append("cache operation provenance mismatch")
-    cold_key = f"apk-current-{ident.get('run_id')}-{ident.get('attempt')}-{ident.get('head')}-{ident.get('engine')}-{ident.get('arm')}-cold"
+    cold_key = f"apk-current-{ident.get('run_id')}-{ident.get('attempt')}-{ident.get('head')}-{ident.get('engine')}-cold"
     if ident.get("scenario") != "cold":
         if clock.get("cache_hit") is not True or clock.get("cache_matched_key") != cold_key or clock.get("cache_expected_key") != cold_key:
             issues.append("exact cache restore hit/provenance missing")
@@ -1103,11 +1198,9 @@ def cmd_verify(_args):
         issues.append("cache pack status does not match expected publication")
     if expected_pack_status == "ok" and packed:
         suffix = "cold" if ident.get("scenario") == "cold" else "lib"
-        middle = (f"{ident.get('engine')}-{ident.get('arm')}"
-                  if ident.get("engine") == "bazel" else ident.get("engine"))
         expected_key = (
             f"apk-current-{ident.get('run_id')}-{ident.get('attempt')}-"
-            f"{ident.get('head')}-{middle}-{suffix}"
+            f"{ident.get('head')}-{ident.get('engine')}-{suffix}"
         )
         if packed[-1].get("key") != expected_key:
             issues.append("cache publication key mismatch")
@@ -1125,14 +1218,16 @@ def cmd_verify(_args):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
-    for name in ("prepare", "run", "emit", "verify"):
+    for name in ("prepare", "run", "emit", "verify", "skip"):
         item = sub.add_parser(name)
-        if name in ("prepare", "run", "emit", "verify"):
-            item.add_argument("--engine", choices=ENGINES, required=True)
-            item.add_argument("--scenario", choices=SCENARIOS, required=True)
+        item.add_argument("--engine", choices=ENGINES, required=True)
+        item.add_argument("--scenario", choices=SCENARIOS, required=True)
+        if name == "skip":
+            item.add_argument("--reason", required=True)
     args = parser.parse_args()
     try:
-        return {"prepare": cmd_prepare, "run": cmd_run, "emit": cmd_emit, "verify": cmd_verify}[args.command](args)
+        return {"prepare": cmd_prepare, "run": cmd_run, "emit": cmd_emit, "verify": cmd_verify,
+                "skip": cmd_skip}[args.command](args)
     except Exception as exc:
         try:
             state = state_load()
