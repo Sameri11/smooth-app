@@ -47,6 +47,18 @@ A valid run requires all requested rows, successful proof collection, exact seed
 
 At n≥3, an engine is faster only when its validated-APK median is at least 10 seconds lower and its slowest row beats the other engine's fastest row. Otherwise the result is “no clear difference.” The edit comparison explicitly pairs stock warm rows with Bazel edit rows. Cross-engine APK hashes are reported, not required to match.
 
+## Current baseline
+
+Run `44767702298` (`results/44767702298-1.json` on `benchmark-results`): workflow commit `44be453`, app revision `6e7408f`, rules_flutter `6ab5ab9`, 4 vCPU / 16 GiB public runners, three repeats, clean-build stock warm. The Dart edit row compares Bazel edit rows against stock warm rows.
+
+| Scenario | Stock validated APK median (rows) | Bazel validated APK median (rows) | Full-job medians (stock / Bazel) | Bazel critical path median | Result |
+|---|---|---|---|---|---|
+| Cold | 591.7 s (591.7, 503.9, 625.7) | 840.3 s (840.3, 810.8, 1039.3) | 644 / 914 s | 524.7 s | Stock faster |
+| Warm | 371.2 s (313.1, 371.2, 413.3) | 288.6 s (299.2, 226.3, 288.6) | 384 / 317 s | 27.6 s | Bazel faster |
+| Dart edit | 371.2 s (stock warm rows) | 348.5 s (348.5, 373.8, 305.6) | 384 / 371 s | 105.5 s | No clear difference |
+
+Stock used 6 jobs and 55 rounded minutes, Bazel 9 jobs and 86; the 4-core cost proxies were $0.66 and $1.03. Seeds were 5.13 GB (stock) and 1.92 GB (Bazel). Bazel cold/warm APKs were all `749a34170ea8…` and edit APKs `e24aefe28e6a…`, the same digests as the historical baseline. Stock warm matched cold/0, and independent cold jobs had equal unsigned identity and different debug signers.
+
 ## Historical baseline
 
 First recorded results: run `44709431697`, app revision `6e7408f`, 4 vCPU / 16 GiB public runners, three repeats per engine/scenario. This is a historical baseline under the previous definition: stock warm and Dart-edit seeds restored project build directories. Those stock timings are not directly comparable to the clean-build stock warm/edit comparison now used; the new stock warm measurements form a new baseline.
