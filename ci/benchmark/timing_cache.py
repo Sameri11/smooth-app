@@ -173,7 +173,9 @@ def pack_archive(engine, root_specs, archive, archive_limit):
                         root.setdefault("excluded_tracked", []).append(name)
                         continue
                     cert = stock_cert_name(name)
-                    if credential_name(name) and not cert:
+                    # Directory names carry no secret (e.g. Gradle's org/gradle/api/credentials/);
+                    # every file below is still checked by name and content.
+                    if credential_name(name) and not cert and not stat.S_ISDIR(path.lstat().st_mode):
                         raise CacheError("credential-like cache file: " + name)
                     info = tar.gettarinfo(str(path), arcname=name)
                     if cert:
@@ -266,7 +268,7 @@ def inspect(engine, archive, roots):
                 if in_tree and name in TRACKED_PARENTS and not m.isdir():
                     raise CacheError("archive would replace tracked directory ancestor: " + name)
                 cert = stock_cert_name(name)
-                if credential_name(name) and not cert:
+                if credential_name(name) and not cert and not m.isdir():
                     raise CacheError("credential-like archive member: " + name)
                 if cert and (not m.isreg() or m.size != STOCK_CERT_SIZE):
                     raise CacheError("unexpected generated stock Flutter certificate type or size: " + name)
