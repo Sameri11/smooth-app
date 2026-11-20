@@ -1,0 +1,323 @@
+{
+  "app_commit": null,
+  "app_ref": "6e7408fda8e46bc97a0d8f2b33a801cf27c8dabe",
+  "comparisons": [
+    {
+      "bazel_critical_path_components_median_seconds": {},
+      "bazel_critical_path_median_seconds": null,
+      "bazel_rows_from": "cold",
+      "full_job_median_seconds": {},
+      "n": 0,
+      "rows_seconds": {
+        "bazel": [
+          null,
+          null,
+          null
+        ],
+        "stock": [
+          null,
+          null,
+          null
+        ]
+      },
+      "scenario": "cold",
+      "stock_rows_from": "cold",
+      "validated_apk_median_seconds": {},
+      "verdict": "invalid"
+    },
+    {
+      "bazel_critical_path_components_median_seconds": {},
+      "bazel_critical_path_median_seconds": null,
+      "bazel_rows_from": "warm",
+      "full_job_median_seconds": {},
+      "n": 0,
+      "rows_seconds": {
+        "bazel": [
+          null,
+          null,
+          null
+        ],
+        "stock": [
+          null,
+          null,
+          null
+        ]
+      },
+      "scenario": "warm",
+      "stock_rows_from": "warm",
+      "validated_apk_median_seconds": {},
+      "verdict": "invalid"
+    },
+    {
+      "bazel_critical_path_components_median_seconds": {},
+      "bazel_critical_path_median_seconds": null,
+      "bazel_rows_from": "lib",
+      "full_job_median_seconds": {},
+      "n": 0,
+      "rows_seconds": {
+        "bazel": [
+          null,
+          null,
+          null
+        ],
+        "stock": [
+          null,
+          null,
+          null
+        ]
+      },
+      "scenario": "edit",
+      "stock_rows_from": "warm",
+      "validated_apk_median_seconds": {},
+      "verdict": "invalid"
+    }
+  ],
+  "cost": {
+    "bazel": {
+      "2_core_proxy_usd": 0.0,
+      "4_core_proxy_usd": 0.0,
+      "jobs": 0,
+      "public_compute_usd": 0,
+      "rounded_job_minutes": 0
+    },
+    "stock": {
+      "2_core_proxy_usd": 0.0,
+      "4_core_proxy_usd": 0.0,
+      "jobs": 0,
+      "public_compute_usd": 0,
+      "rounded_job_minutes": 0
+    }
+  },
+  "issues": [
+    "APK timing / stock / cold / 0 (136321587633): job did not succeed",
+    "APK timing / stock / cold / 1 (136321587706): job did not succeed",
+    "APK timing / stock / cold / 2 (136321587710): job did not succeed",
+    "APK timing / stock / warm / 0: missing or duplicate job",
+    "APK timing / stock / warm / 1: missing or duplicate job",
+    "APK timing / stock / warm / 2: missing or duplicate job",
+    "APK timing / bazel / cold / 0 (136321587790): job did not succeed",
+    "APK timing / bazel / cold / 1 (136321587652): job did not succeed",
+    "APK timing / bazel / cold / 2 (136321587702): job did not succeed",
+    "APK timing / bazel / warm / 0: missing or duplicate job",
+    "APK timing / bazel / warm / 1: missing or duplicate job",
+    "APK timing / bazel / warm / 2: missing or duplicate job",
+    "APK timing / bazel / lib / 0: missing or duplicate job",
+    "APK timing / bazel / lib / 1: missing or duplicate job",
+    "APK timing / bazel / lib / 2: missing or duplicate job",
+    "stock warm APK differs from cold/0",
+    "stock cold/1 is not signature-only variation",
+    "stock cold/2 is not signature-only variation",
+    "bazel APK digests differ across cold/warm rows",
+    "Bazel Dart-edit APK digest gate failed",
+    "app commit provenance is missing or inconsistent"
+  ],
+  "repeats": 3,
+  "rows": [
+    {
+      "conclusion": "failure",
+      "evidence_error": "job did not succeed",
+      "job_id": 136321587633,
+      "job_ids": [
+        136321587633
+      ],
+      "name": "APK timing / stock / cold / 0",
+      "provider_seconds": 628.0,
+      "status": "completed"
+    },
+    {
+      "conclusion": "failure",
+      "evidence_error": "job did not succeed",
+      "job_id": 136321587706,
+      "job_ids": [
+        136321587706
+      ],
+      "name": "APK timing / stock / cold / 1",
+      "provider_seconds": 506.0,
+      "status": "completed"
+    },
+    {
+      "conclusion": "failure",
+      "evidence_error": "job did not succeed",
+      "job_id": 136321587710,
+      "job_ids": [
+        136321587710
+      ],
+      "name": "APK timing / stock / cold / 2",
+      "provider_seconds": 650.0,
+      "status": "completed"
+    },
+    {
+      "evidence_error": "missing or duplicate job",
+      "job_ids": [],
+      "name": "APK timing / stock / warm / 0"
+    },
+    {
+      "evidence_error": "missing or duplicate job",
+      "job_ids": [],
+      "name": "APK timing / stock / warm / 1"
+    },
+    {
+      "evidence_error": "missing or duplicate job",
+      "job_ids": [],
+      "name": "APK timing / stock / warm / 2"
+    },
+    {
+      "conclusion": "failure",
+      "evidence_error": "job did not succeed",
+      "job_id": 136321587790,
+      "job_ids": [
+        136321587790
+      ],
+      "name": "APK timing / bazel / cold / 0",
+      "provider_seconds": 829.0,
+      "status": "completed"
+    },
+    {
+      "conclusion": "failure",
+      "evidence_error": "job did not succeed",
+      "job_id": 136321587652,
+      "job_ids": [
+        136321587652
+      ],
+      "name": "APK timing / bazel / cold / 1",
+      "provider_seconds": 1178.0,
+      "status": "completed"
+    },
+    {
+      "conclusion": "failure",
+      "evidence_error": "job did not succeed",
+      "job_id": 136321587702,
+      "job_ids": [
+        136321587702
+      ],
+      "name": "APK timing / bazel / cold / 2",
+      "provider_seconds": 829.0,
+      "status": "completed"
+    },
+    {
+      "evidence_error": "missing or duplicate job",
+      "job_ids": [],
+      "name": "APK timing / bazel / warm / 0"
+    },
+    {
+      "evidence_error": "missing or duplicate job",
+      "job_ids": [],
+      "name": "APK timing / bazel / warm / 1"
+    },
+    {
+      "evidence_error": "missing or duplicate job",
+      "job_ids": [],
+      "name": "APK timing / bazel / warm / 2"
+    },
+    {
+      "evidence_error": "missing or duplicate job",
+      "job_ids": [],
+      "name": "APK timing / bazel / lib / 0"
+    },
+    {
+      "evidence_error": "missing or duplicate job",
+      "job_ids": [],
+      "name": "APK timing / bazel / lib / 1"
+    },
+    {
+      "evidence_error": "missing or duplicate job",
+      "job_ids": [],
+      "name": "APK timing / bazel / lib / 2"
+    }
+  ],
+  "rules_commit": "6ab5ab906916abfdbd80d8a843bee87df500766d",
+  "run_attempt": 1,
+  "run_id": "44745486388",
+  "runner_class": "ubuntu-24.04 standard public runner",
+  "runner_observations": [
+    {
+      "job": "APK timing / stock / cold / 0",
+      "memory_bytes": null,
+      "vcpus": null
+    },
+    {
+      "job": "APK timing / stock / cold / 1",
+      "memory_bytes": null,
+      "vcpus": null
+    },
+    {
+      "job": "APK timing / stock / cold / 2",
+      "memory_bytes": null,
+      "vcpus": null
+    },
+    {
+      "job": "APK timing / stock / warm / 0",
+      "memory_bytes": null,
+      "vcpus": null
+    },
+    {
+      "job": "APK timing / stock / warm / 1",
+      "memory_bytes": null,
+      "vcpus": null
+    },
+    {
+      "job": "APK timing / stock / warm / 2",
+      "memory_bytes": null,
+      "vcpus": null
+    },
+    {
+      "job": "APK timing / bazel / cold / 0",
+      "memory_bytes": null,
+      "vcpus": null
+    },
+    {
+      "job": "APK timing / bazel / cold / 1",
+      "memory_bytes": null,
+      "vcpus": null
+    },
+    {
+      "job": "APK timing / bazel / cold / 2",
+      "memory_bytes": null,
+      "vcpus": null
+    },
+    {
+      "job": "APK timing / bazel / warm / 0",
+      "memory_bytes": null,
+      "vcpus": null
+    },
+    {
+      "job": "APK timing / bazel / warm / 1",
+      "memory_bytes": null,
+      "vcpus": null
+    },
+    {
+      "job": "APK timing / bazel / warm / 2",
+      "memory_bytes": null,
+      "vcpus": null
+    },
+    {
+      "job": "APK timing / bazel / lib / 0",
+      "memory_bytes": null,
+      "vcpus": null
+    },
+    {
+      "job": "APK timing / bazel / lib / 1",
+      "memory_bytes": null,
+      "vcpus": null
+    },
+    {
+      "job": "APK timing / bazel / lib / 2",
+      "memory_bytes": null,
+      "vcpus": null
+    }
+  ],
+  "seed_cache_proofs": [
+    {
+      "combined_bytes": null,
+      "engine": "stock",
+      "gradle_top_level_directories": []
+    },
+    {
+      "combined_bytes": null,
+      "engine": "bazel",
+      "gradle_top_level_directories": []
+    }
+  ],
+  "valid": false,
+  "workflow_commit": "71e10cc35feba5da4d2eed6d1d1843c4e6ceb1a6"
+}
