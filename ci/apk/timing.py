@@ -32,8 +32,8 @@ SDK = Path(os.environ.get("RUNNER_TEMP", tempfile.gettempdir())) / "flutter"
 PUB = Path(os.environ.get("RUNNER_TEMP", tempfile.gettempdir())) / "cache-state" / "pub"
 BAZELISK = Path(os.environ.get("RUNNER_TEMP", tempfile.gettempdir())) / "cache-state" / "bazelisk"
 WORKLOAD_HEAD = "6e7408fda8e46bc97a0d8f2b33a801cf27c8dabe"
-PREVIOUS_HARNESS_HEAD = "50c6178f1f0239ddaee7afd4adb324dab0e977e9"
-ARMS = ("U", "F", "A")
+PREVIOUS_HARNESS_HEAD = "7e903dcf0199effdadf905a0fe8d0bc141fb53f6"
+ARMS = ("U",)
 HUB_REPOSITORIES = (
     "flutter_maven", "flutter_maven_debug", "rules_android_maven",
     "android_ide_common_30_1_3", "bazel_worker_maven",
@@ -41,15 +41,18 @@ HUB_REPOSITORIES = (
 HARNESS_FILES = {
     ".github/workflows/ci-apk-timing.yml", "ci/apk/timing.py", "ci/apk/timing_cache.py",
     "ci/apk/maven-downloader.cfg", "MODULE.bazel",
+    "ci/apk/stock-maven-mirror.init.gradle",
     *(f"ci/apk/arms/{arm}.json" for arm in ARMS),
-    *(f"ci/apk/arms/{arm}_{repo}.json" for arm, repos in {
-        "F": ("flutter_maven", "flutter_maven_debug"),
-        "A": HUB_REPOSITORIES,
-    }.items() for repo in repos),
     *(f"ci/apk/arms/{arm}.MODULE.bazel.lock" for arm in ARMS),
-    # Host-tool arm files inherited from the previous harness stay committed.
     *(f"ci/apk/arms/{arm}{suffix}" for arm in ("prebuilt", "src")
       for suffix in (".json", ".MODULE.bazel.lock")),
+    *(f"ci/apk/arms/{arm}_{repo}.json" for arm, repos in {
+        "F": ("flutter_maven", "flutter_maven_debug"),
+        "A": ("flutter_maven", "flutter_maven_debug", "rules_android_maven",
+              "android_ide_common_30_1_3", "bazel_worker_maven"),
+    }.items() for repo in repos),
+    *(f"ci/apk/arms/{arm}.json" for arm in ("F", "A")),
+    *(f"ci/apk/arms/{arm}.MODULE.bazel.lock" for arm in ("F", "A")),
 }
 PROFILE_PHASES = {
     "Launch Blaze", "Initialize command", "Evaluate target patterns",
@@ -516,18 +519,18 @@ def cmd_prepare(args):
         raise RuntimeError(f"APK_ARM must be one of {', '.join(ARMS)}")
     tree = tracked_tree(args.engine, arm)
     verify_frozen(tree)
+    repeat = int(os.environ.get("APK_REPEAT", "0"))
+    identity_row = {"head": head, "run_id": os.environ.get("GITHUB_RUN_ID", ""),
+                    "workload_head": WORKLOAD_HEAD, "attempt": os.environ.get("GITHUB_RUN_ATTEMPT", ""),
+                    "engine": args.engine, "scenario": args.scenario, "arm": arm, "repeat": repeat,
+                    "download_outputs": download_outputs, "bazel_jobs": bazel_jobs,
+                    "workflow_start_epoch": None,
+                    "inputs_sha256": digest(json.dumps(manifest["inputs"], sort_keys=True).encode()),
+                    "rules_revision": manifest["rules"]["revision"],
+                    "library_source_sha256": file_hash(tree / LIB_REL),
+                    "flutter": manifest["flutter"], "bazel": manifest["bazel"]}
     state = {"schema": 1, "kind": "smooth-current-debug-apk-timing", "status": "prepared",
-             "identity": {"head": head, "run_id": os.environ.get("GITHUB_RUN_ID", ""),
-                          "workload_head": WORKLOAD_HEAD,
-                          "attempt": os.environ.get("GITHUB_RUN_ATTEMPT", ""),
-                          "engine": args.engine, "scenario": args.scenario, "arm": arm,
-                          "download_outputs": download_outputs, "bazel_jobs": bazel_jobs,
-                          "workflow_start_epoch": None,
-                          "inputs_sha256": digest(json.dumps(manifest["inputs"], sort_keys=True).encode()),
-                          "rules_revision": manifest["rules"]["revision"],
-                          "library_source_sha256": file_hash(tree / LIB_REL),
-                          "flutter": manifest["flutter"], "bazel": manifest["bazel"]},
-             "runner": runner_metadata(),
+             "identity": identity_row, "runner": runner_metadata(),
              "build_config": {"target": APK_TARGET, "stock_target": ENTRYPOINT, "abi": "x86_64",
                               "mode": "debug", "bazel_configuration": "fastbuild",
                               "bazel_jobs": bazel_jobs, "arm": arm,
@@ -576,13 +579,11 @@ def run_remote_config(state):
     host, project, token = values
     if "://" in host or "/" in host:
         raise RuntimeError("remote cache host must contain no scheme/path")
-    identity_values = [state["identity"][key] for key in ("run_id", "attempt", "head")]
-    if (not re.fullmatch(r"[0-9]+", identity_values[0])
-            or not re.fullmatch(r"[0-9]+", identity_values[1])
-            or not re.fullmatch(r"[0-9a-f]{40}", identity_values[2])
-            or state["identity"].get("arm") not in ARMS):
-        raise RuntimeError("remote salt requires numeric run/attempt, exact head and supported arm")
-    salt = "/".join(identity_values)
+    repeat = state["identity"].get("repeat") if state["identity"]["scenario"] == "cold" else 0
+    if repeat not in (0, 1, 2):
+        raise RuntimeError("remote salt requires repeat 0, 1 or 2")
+    identity_values = [str(state["identity"][key]) for key in ("run_id", "attempt", "head")]
+    salt = "/".join(identity_values + [str(repeat)])
     rc = ROOT / "remote-cache.bazelrc"
     rc_text = "".join("build " + shlex.quote(x) + "\n" for x in (
         "--remote_cache=grpcs://" + host, "--remote_instance_name=" + project,
@@ -1013,10 +1014,20 @@ def cmd_run(args):
     clock_path = ROOT / "workflow-clock.json"
     clock = json.loads(clock_path.read_text()) if clock_path.is_file() else {}
     required_start = float(clock.get("job_start_epoch", time.time()))
-    state["repository_cache_mode"] = os.environ.get("APK_REPO_MODE", "seed")
-    state["repeat"] = os.environ.get("APK_REPEAT")
+    state["repeat"] = int(os.environ.get("APK_REPEAT", "0"))
     state["repository_cache_restore_seconds"] = clock.get("repository_cache_restore_seconds", 0)
     try:
+        if args.engine == "stock":
+            mirror_source = WS / "ci/apk/stock-maven-mirror.init.gradle"
+            mirror_installed = Path(env["GRADLE_USER_HOME"]) / "init.d" / mirror_source.name
+            expected_mirror_hash = file_hash(mirror_source)
+            if not expected_mirror_hash or file_hash(mirror_installed) != expected_mirror_hash:
+                raise RuntimeError("stock Maven mirror init script is missing or differs from its tracked source")
+            state["stock_gradle_mirror"] = {
+                "script_sha256": expected_mirror_hash,
+                "installed_path": "home/.gradle/init.d/" + mirror_source.name,
+                "mirror_url": "https://maven-central.storage-download.googleapis.com/maven2",
+            }
         with phase(state, "verify-tool-identities"):
             verify_tool_identity(args.engine, tree, state, env)
         if args.engine == "bazel":
@@ -1283,24 +1294,19 @@ def cmd_verify(_args):
            or str(op.get("run_attempt")) != str(ident.get("attempt")) or op.get("engine") != ident.get("engine")
            or op.get("scenario") != ident.get("scenario") for op in operations):
         issues.append("cache operation provenance mismatch")
-    cache_arm = f"-{ident.get('arm')}" if ident.get("engine") == "bazel" else ""
-    cold_key = f"apk-current-{ident.get('run_id')}-{ident.get('attempt')}-{ident.get('head')}-{ident.get('engine')}{cache_arm}-cold"
+    cold_key = f"apk-current-{ident.get('run_id')}-{ident.get('attempt')}-{ident.get('head')}-{ident.get('engine')}-cold"
     if ident.get("scenario") != "cold":
         if clock.get("cache_hit") is not True or clock.get("cache_matched_key") != cold_key or clock.get("cache_expected_key") != cold_key:
             issues.append("exact cache restore hit/provenance missing")
         restored = [op for op in operations if op.get("command") == "restore"]
         if not restored or restored[-1].get("status") != "ok" or restored[-1].get("key") != cold_key:
             issues.append("exact cold cache snapshot was not restored")
-    expected_pack_status = "ok" if ident.get("scenario") == "cold" or (ident.get("engine") == "stock" and ident.get("scenario") == "lib") else "skipped"
+    expected_pack_status = "ok" if ident.get("scenario") == "cold" and int(ident.get("repeat", 0)) == 0 else "skipped"
     packed = [op for op in operations if op.get("command") == "pack"]
     if not packed or packed[-1].get("status") != expected_pack_status:
         issues.append("cache pack status does not match expected publication")
     if expected_pack_status == "ok" and packed:
-        suffix = "cold" if ident.get("scenario") == "cold" else "lib"
-        expected_key = (
-            f"apk-current-{ident.get('run_id')}-{ident.get('attempt')}-"
-            f"{ident.get('head')}-{ident.get('engine')}{cache_arm}-{suffix}"
-        )
+        expected_key = cold_key
         if packed[-1].get("key") != expected_key:
             issues.append("cache publication key mismatch")
         published = clock.get("published_cache")

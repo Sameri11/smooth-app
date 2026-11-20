@@ -7,7 +7,7 @@ RUNNER = Path(os.environ.get("RUNNER_TEMP", "."))
 ROOT, TRANSPORT = RUNNER / "apk-timing", RUNNER / "apk-timing-cache"
 WORKTREE = Path(__file__).resolve().parents[2]
 GIB, HEADROOM = 1 << 30, 64 << 20
-CAPS = {"stock-cold": 8 * GIB, "bazel-cold": 3 * GIB, "stock-lib": GIB}
+CAPS = {"stock-cold": 8 * GIB, "bazel-cold": 3 * GIB}
 PACKAGES = ("packages/smooth_app", "packages/app_store/apple_app_store", "packages/app_store/google_play", "packages/app_store/shared", "packages/app_store/uri_store", "packages/scanner/ml_kit", "packages/scanner/shared", "packages/scanner/zxing")
 CREDENTIAL_NAMES = {".netrc", ".npmrc", ".pypirc", "credentials", "credentials.json", "remote-cache.bazelrc", "google-services.json", "key.properties", "id_rsa", "id_ed25519", "known_hosts", "auth.json", "token", "access_token", "refresh_token"}
 def credential_name(name):
@@ -56,7 +56,6 @@ def generated_roots():
 def specs(engine, scenario):
     if engine == "stock" and scenario == "cold": return "cold", [("flutter", "sdk", True), ("cache-state/pub", "pub", True), ("home/.gradle", "gradle-home", False), ("home/.android/debug.keystore", "debug-keystore", False)] + generated_roots()
     if engine == "bazel" and scenario == "cold": return "cold", [("flutter", "sdk", True), ("cache-state/pub", "pub", True), ("cache-state/bazelisk", "bazelisk", True), ("bazel", "bazel-binary", True)]
-    if engine == "stock" and scenario == "lib": return "lib", generated_roots()
     return None, []
 
 def base_for(rel, engine):
@@ -127,12 +126,10 @@ class GuardedReader:
         out, self.buf = self.buf[:n], self.buf[n:]; return out
 
 def key(engine, scenario):
-    arm = f"-{required_env('APK_ARM')}" if engine == "bazel" else ""
-    return f"apk-current-{required_env('GITHUB_RUN_ID')}-{required_env('GITHUB_RUN_ATTEMPT')}-{required_env('GITHUB_SHA')}-{engine}{arm}-cold"
+    return f"apk-current-{required_env('GITHUB_RUN_ID')}-{required_env('GITHUB_RUN_ATTEMPT')}-{required_env('GITHUB_SHA')}-{engine}-cold"
 
 def identity(engine, scenario):
-    return {"schema": 1, "engine": engine, "scenario": scenario, "head": required_env("GITHUB_SHA"), "run_id": required_env("GITHUB_RUN_ID"), "run_attempt": required_env("GITHUB_RUN_ATTEMPT"), "arm": required_env("APK_ARM") if engine == "bazel" else None, "ancestor": "cold" if scenario in ("warm", "lib") else "self"}
-
+    return {"schema": 1, "engine": engine, "scenario": scenario, "head": required_env("GITHUB_SHA"), "run_id": required_env("GITHUB_RUN_ID"), "run_attempt": required_env("GITHUB_RUN_ATTEMPT"), "arm": "U" if engine == "bazel" else None, "ancestor": "cold" if scenario in ("warm", "lib") else "self"}
 def outputs(upload, cache_path, cache_key):
     text = f"upload={'true' if upload else 'false'}\npath={cache_path}\nkey={cache_key}\n"
     dest = os.environ.get("GITHUB_OUTPUT")
@@ -208,7 +205,12 @@ def pack_archive(engine, root_specs, archive, archive_limit):
             "raw_bytes": raw, "entries": count}
 
 def pack(engine, scenario, op):
-    cachekey = key(engine, scenario); kind, roots = specs(engine, scenario)
+    cachekey = key(engine, scenario)
+    if scenario != "cold" or os.environ.get("APK_REPEAT", "0") != "0":
+        op.update(status="skipped", reason="only cold repeat 0 publishes the engine seed")
+        outputs(False, TRANSPORT, cachekey)
+        return
+    kind, roots = specs(engine, scenario)
     if not kind:
         op.update(status="skipped", reason="no snapshot for scenario"); outputs(False, TRANSPORT, cachekey); return
     cap = CAPS[f"{engine}-{kind}"]; TRANSPORT.mkdir(parents=True, exist_ok=True)

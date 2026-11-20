@@ -1,4 +1,4 @@
-name: Debug APK remote output comparison
+name: Debug APK stock vs Bazel timing
 
 on:
   push:
@@ -12,6 +12,7 @@ on:
       - 'ci/apk/maven-downloader.cfg'
       - 'MODULE.bazel.lock'
 
+      - 'ci/apk/stock-maven-mirror.init.gradle'
 permissions:
   contents: read
   actions: write
@@ -23,21 +24,21 @@ concurrency:
 env:
   CI: 'true'
   FLUTTER_SUPPRESS_ANALYTICS: 'true'
-  ENGINE: bazel
 
 jobs:
-  bazel-cold:
-    name: APK timing / U / cold seed
-    if: github.repository == 'Sameri11/smooth-app' && github.ref == 'refs/heads/prototype/apk-maven-pin'
+  cold-stock-0:
+    name: APK timing / stock / cold / 0
+    if: github.repository == 'Sameri11/smooth-app' && github.ref == 'refs/heads/prototype/apk-stock-vs-bazel'
     runs-on: ubuntu-24.04
     timeout-minutes: 60
-    outputs:
-      apk_proof: ${{ steps.build.outputs.apk_proof }}
     env:
+      ENGINE: stock
       SCENARIO: cold
+      APK_REPEAT: '0'
       APK_ARM: U
       APK_REPO_MODE: R0
-      APK_BAZEL_JOBS: '128'
+    outputs:
+      apk_proof: ${{ steps.build.outputs.apk_proof }}
     steps: &workload
       - name: Start required-result clock and isolate state
         shell: bash
@@ -55,17 +56,17 @@ jobs:
             echo "PUB_CACHE=$RUNNER_TEMP/cache-state/pub"
             echo "BAZELISK_HOME=$RUNNER_TEMP/cache-state/bazelisk"
             echo "APK_TIMING_DEADLINE_EPOCH=$(( $(date +%s) + 3300 ))"
-            echo "APK_CACHE_KEY=apk-current-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-$GITHUB_SHA-bazel-$APK_ARM-cold"
+            echo "APK_CACHE_KEY=apk-current-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-$GITHUB_SHA-$ENGINE-cold"
           } >> "$GITHUB_ENV"
           echo "$JAVA_HOME_17_X64/bin" >> "$GITHUB_PATH"
           df -Pk "$RUNNER_TEMP"
-          # These preinstalled tools are not used by this Android workload.
           sudo rm -rf /usr/share/dotnet /usr/local/swift /opt/ghc /opt/hostedtoolcache/CodeQL
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
-          fetch-depth: 10
+          fetch-depth: 11
       - name: Check out frozen rules
+        if: env.ENGINE == 'bazel'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: Sameri11/rules_flutter
@@ -85,7 +86,7 @@ jobs:
           d = json.loads(p.read_text()); d['cache_download_start_epoch'] = time.time()
           p.write_text(json.dumps(d))
           PY
-      - name: Restore exact arm seed
+      - name: Restore exact engine seed
         if: env.SCENARIO != 'cold'
         id: seed
         uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
@@ -93,7 +94,7 @@ jobs:
           path: ${{ runner.temp }}/apk-timing-cache
           key: ${{ env.APK_CACHE_KEY }}
           fail-on-cache-miss: true
-      - name: Verify and unpack exact arm seed
+      - name: Verify and unpack exact engine seed
         if: env.SCENARIO != 'cold'
         shell: bash
         env:
@@ -125,10 +126,12 @@ jobs:
           echo "0c7e47fc39ef86290b41707d687bdca7f82b277267a6ef74717f8e88ac423de1  $RUNNER_TEMP/flutter.tar.xz" | sha256sum --check
           tar -xJf "$RUNNER_TEMP/flutter.tar.xz" -C "$RUNNER_TEMP"
           rm "$RUNNER_TEMP/flutter.tar.xz"
-          curl --fail --location --retry 2 --output "$RUNNER_TEMP/bazel" \
-            https://github.com/bazelbuild/bazelisk/releases/download/v1.29.0/bazelisk-linux-amd64
-          echo "5a408715e932c0250d28bd84555f12edbf70117de42f9181691c736eacc4a992  $RUNNER_TEMP/bazel" | sha256sum --check
-          chmod +x "$RUNNER_TEMP/bazel"
+          if [[ "$ENGINE" == bazel ]]; then
+            curl --fail --location --retry 2 --output "$RUNNER_TEMP/bazel" \
+              https://github.com/bazelbuild/bazelisk/releases/download/v1.29.0/bazelisk-linux-amd64
+            echo "5a408715e932c0250d28bd84555f12edbf70117de42f9181691c736eacc4a992  $RUNNER_TEMP/bazel" | sha256sum --check
+            chmod +x "$RUNNER_TEMP/bazel"
+          fi
       - name: Verify tools and install pinned Android dependencies
         shell: bash
         run: |
@@ -149,6 +152,14 @@ jobs:
           echo "$FLUTTER_ROOT/bin" >> "$GITHUB_PATH"
           echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
           df -Pk "$RUNNER_TEMP"
+      - name: Install stock Maven Central mirror
+        if: env.ENGINE == 'stock'
+        shell: bash
+        run: |
+          set -euo pipefail
+          install_dir="$RUNNER_TEMP/apk-timing/home/.gradle/init.d"
+          mkdir -p "$install_dir"
+          install -m 0644 ci/apk/stock-maven-mirror.init.gradle "$install_dir/stock-maven-mirror.init.gradle"
       - name: Build and validate current APK
         id: build
         shell: bash
@@ -160,18 +171,19 @@ jobs:
           root="$RUNNER_TEMP/apk-timing"
           trap 'rm -f "$root/remote-cache.bazelrc" "$root/logs/bep.json" "$root/logs/bazel-profile.json"' EXIT
           python3 ci/apk/timing.py run --engine "$ENGINE" --scenario "$SCENARIO"
-      - name: Pack bounded arm seed
+      - name: Pack bounded engine seed
+        if: always()
         id: pack
         shell: bash
         run: python3 ci/apk/timing_cache.py pack --engine "$ENGINE" --scenario "$SCENARIO"
-      - name: Publish exact arm seed
+      - name: Publish exact engine seed
         if: steps.pack.outputs.upload == 'true'
         uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830
         with:
           path: ${{ steps.pack.outputs.path }}
           key: ${{ steps.pack.outputs.key }}
-      - name: Record and bound arm seed cache
-        if: always() && env.SCENARIO == 'cold' && steps.pack.outputs.upload == 'true'
+      - name: Record and bound seed cache
+        if: always() && env.SCENARIO == 'cold' && env.APK_REPEAT == '0' && steps.pack.outputs.upload == 'true'
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -184,9 +196,10 @@ jobs:
           listing=json.loads((pathlib.Path(os.environ['RUNNER_TEMP'])/'apk-cache-after.json').read_text())
           if listing['total_count']>100: raise RuntimeError('Cache listing exceeds one page')
           rows=[c for c in listing['actions_caches'] if c['key']==os.environ['PUBLISHED_KEY']]
-          if len(rows)!=1: raise RuntimeError('Exact arm seed cache missing or duplicated')
+          if len(rows)!=1: raise RuntimeError('Exact engine seed cache missing or duplicated')
           row=rows[0]
-          if row['size_in_bytes']>3*1024**3: raise RuntimeError('Arm seed cache exceeds 3 GiB')
+          cap=8 if os.environ['ENGINE']=='stock' else 3
+          if row['size_in_bytes']>cap*1024**3: raise RuntimeError('Engine seed cache exceeds its cap')
           total=sum(c['size_in_bytes'] for c in listing['actions_caches'])
           if total>9*1024**3: raise RuntimeError('GitHub cache total exceeds 9 GiB')
           clock=pathlib.Path(os.environ['RUNNER_TEMP'])/'apk-timing/workflow-clock.json'
@@ -196,15 +209,14 @@ jobs:
           print(json.dumps({'key':row['key'],'size_in_bytes':row['size_in_bytes'],'total_bytes':total}))
           PY
       - name: Shut down isolated Bazel server
-        if: always()
+        if: always() && env.ENGINE == 'bazel'
         shell: bash
         run: |
           root="$RUNNER_TEMP/apk-timing"
           base="$root/bazel-output-base"
           if [[ -x "$RUNNER_TEMP/bazel" && -d "$base/server" ]]; then
             cd "$root/trees/bazel"
-            HOME="$root/home" timeout 30 "$RUNNER_TEMP/bazel" --nosystem_rc --nohome_rc --noworkspace_rc \
-              --output_base="$base" shutdown
+            HOME="$root/home" timeout 30 "$RUNNER_TEMP/bazel" --nosystem_rc --nohome_rc --noworkspace_rc --output_base="$base" shutdown
           fi
       - name: Emit compact evidence without artifacts
         if: always()
@@ -219,281 +231,92 @@ jobs:
           APK_TIMING_JOB_STATUS: ${{ job.status }}
         run: python3 ci/apk/timing.py verify --engine "$ENGINE" --scenario "$SCENARIO"
 
-  warm-u-0:
-    name: APK timing / U / warm / 0
-    needs: bazel-cold
-    if: always() && needs.bazel-cold.result == 'success'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 60
-    env:
-      SCENARIO: warm
-      APK_ARM: U
-      APK_REPO_MODE: R0
-      APK_BAZEL_JOBS: '128'
-      APK_REPEAT: '0'
-      APK_SEED_PROOF: ${{ needs.bazel-cold.outputs.apk_proof }}
-    steps: *workload
-  warm-u-1:
-    name: APK timing / U / warm / 1
-    needs: bazel-cold
-    if: always() && needs.bazel-cold.result == 'success'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 60
-    env:
-      SCENARIO: warm
-      APK_ARM: U
-      APK_REPO_MODE: R0
-      APK_BAZEL_JOBS: '128'
-      APK_REPEAT: '1'
-      APK_SEED_PROOF: ${{ needs.bazel-cold.outputs.apk_proof }}
-    steps: *workload
-  warm-u-2:
-    name: APK timing / U / warm / 2
-    needs: bazel-cold
-    if: always() && needs.bazel-cold.result == 'success'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 60
-    env:
-      SCENARIO: warm
-      APK_ARM: U
-      APK_REPO_MODE: R0
-      APK_BAZEL_JOBS: '128'
-      APK_REPEAT: '2'
-      APK_SEED_PROOF: ${{ needs.bazel-cold.outputs.apk_proof }}
-    steps: *workload
-  lib-u-0:
-    name: APK timing / U / lib / 0
-    needs: bazel-cold
-    if: always() && needs.bazel-cold.result == 'success'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 60
-    env:
-      SCENARIO: lib
-      APK_ARM: U
-      APK_REPO_MODE: R0
-      APK_BAZEL_JOBS: '128'
-      APK_REPEAT: '0'
-      APK_SEED_PROOF: ${{ needs.bazel-cold.outputs.apk_proof }}
-    steps: *workload
-  lib-u-1:
-    name: APK timing / U / lib / 1
-    needs: bazel-cold
-    if: always() && needs.bazel-cold.result == 'success'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 60
-    env:
-      SCENARIO: lib
-      APK_ARM: U
-      APK_REPO_MODE: R0
-      APK_BAZEL_JOBS: '128'
-      APK_REPEAT: '1'
-      APK_SEED_PROOF: ${{ needs.bazel-cold.outputs.apk_proof }}
-    steps: *workload
-  lib-u-2:
-    name: APK timing / U / lib / 2
-    needs: bazel-cold
-    if: always() && needs.bazel-cold.result == 'success'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 60
-    env:
-      SCENARIO: lib
-      APK_ARM: U
-      APK_REPO_MODE: R0
-      APK_BAZEL_JOBS: '128'
-      APK_REPEAT: '2'
-      APK_SEED_PROOF: ${{ needs.bazel-cold.outputs.apk_proof }}
-    steps: *workload
-  cold-f:
-    name: APK timing / F / cold seed
-    if: github.repository == 'Sameri11/smooth-app' && github.ref == 'refs/heads/prototype/apk-maven-pin'
+  cold-bazel-0:
+    name: APK timing / bazel / cold / 0
+    if: github.repository == 'Sameri11/smooth-app' && github.ref == 'refs/heads/prototype/apk-stock-vs-bazel'
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     outputs:
       apk_proof: ${{ steps.build.outputs.apk_proof }}
     env:
+      ENGINE: bazel
       SCENARIO: cold
-      APK_ARM: F
-      APK_REPO_MODE: R0
-      APK_BAZEL_JOBS: '128'
-    steps: *workload
-  warm-f-0:
-    name: APK timing / F / warm / 0
-    needs: cold-f
-    if: always() && needs.cold-f.result == 'success'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 60
-    env:
-      SCENARIO: warm
-      APK_ARM: F
-      APK_REPO_MODE: R0
-      APK_BAZEL_JOBS: '128'
       APK_REPEAT: '0'
-      APK_SEED_PROOF: ${{ needs.cold-f.outputs.apk_proof }}
-    steps: *workload
-  warm-f-1:
-    name: APK timing / F / warm / 1
-    needs: cold-f
-    if: always() && needs.cold-f.result == 'success'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 60
-    env:
-      SCENARIO: warm
-      APK_ARM: F
+      APK_ARM: U
       APK_REPO_MODE: R0
       APK_BAZEL_JOBS: '128'
-      APK_REPEAT: '1'
-      APK_SEED_PROOF: ${{ needs.cold-f.outputs.apk_proof }}
     steps: *workload
-  warm-f-2:
-    name: APK timing / F / warm / 2
-    needs: cold-f
-    if: always() && needs.cold-f.result == 'success'
+  cold-stock-extra:
+    name: APK timing / stock / cold / ${{ matrix.repeat }}
+    if: github.repository == 'Sameri11/smooth-app' && github.ref == 'refs/heads/prototype/apk-stock-vs-bazel'
     runs-on: ubuntu-24.04
     timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        repeat: ['1', '2']
     env:
-      SCENARIO: warm
-      APK_ARM: F
-      APK_REPO_MODE: R0
-      APK_BAZEL_JOBS: '128'
-      APK_REPEAT: '2'
-      APK_SEED_PROOF: ${{ needs.cold-f.outputs.apk_proof }}
-    steps: *workload
-  lib-f-0:
-    name: APK timing / F / lib / 0
-    needs: cold-f
-    if: always() && needs.cold-f.result == 'success'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 60
-    env:
-      SCENARIO: lib
-      APK_ARM: F
-      APK_REPO_MODE: R0
-      APK_BAZEL_JOBS: '128'
-      APK_REPEAT: '0'
-      APK_SEED_PROOF: ${{ needs.cold-f.outputs.apk_proof }}
-    steps: *workload
-  lib-f-1:
-    name: APK timing / F / lib / 1
-    needs: cold-f
-    if: always() && needs.cold-f.result == 'success'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 60
-    env:
-      SCENARIO: lib
-      APK_ARM: F
-      APK_REPO_MODE: R0
-      APK_BAZEL_JOBS: '128'
-      APK_REPEAT: '1'
-      APK_SEED_PROOF: ${{ needs.cold-f.outputs.apk_proof }}
-    steps: *workload
-  lib-f-2:
-    name: APK timing / F / lib / 2
-    needs: cold-f
-    if: always() && needs.cold-f.result == 'success'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 60
-    env:
-      SCENARIO: lib
-      APK_ARM: F
-      APK_REPO_MODE: R0
-      APK_BAZEL_JOBS: '128'
-      APK_REPEAT: '2'
-      APK_SEED_PROOF: ${{ needs.cold-f.outputs.apk_proof }}
-    steps: *workload
-  cold-a:
-    name: APK timing / A / cold seed
-    if: github.repository == 'Sameri11/smooth-app' && github.ref == 'refs/heads/prototype/apk-maven-pin'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 60
-    outputs:
-      apk_proof: ${{ steps.build.outputs.apk_proof }}
-    env:
+      ENGINE: stock
       SCENARIO: cold
-      APK_ARM: A
+      APK_REPEAT: ${{ matrix.repeat }}
+      APK_ARM: U
       APK_REPO_MODE: R0
-      APK_BAZEL_JOBS: '128'
     steps: *workload
-  warm-a-0:
-    name: APK timing / A / warm / 0
-    needs: cold-a
-    if: always() && needs.cold-a.result == 'success'
+  cold-bazel-extra:
+    name: APK timing / bazel / cold / ${{ matrix.repeat }}
+    if: github.repository == 'Sameri11/smooth-app' && github.ref == 'refs/heads/prototype/apk-stock-vs-bazel'
     runs-on: ubuntu-24.04
     timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        repeat: ['1', '2']
     env:
-      SCENARIO: warm
-      APK_ARM: A
+      ENGINE: bazel
+      SCENARIO: cold
+      APK_REPEAT: ${{ matrix.repeat }}
+      APK_ARM: U
       APK_REPO_MODE: R0
       APK_BAZEL_JOBS: '128'
-      APK_REPEAT: '0'
-      APK_SEED_PROOF: ${{ needs.cold-a.outputs.apk_proof }}
     steps: *workload
-  warm-a-1:
-    name: APK timing / A / warm / 1
-    needs: cold-a
-    if: always() && needs.cold-a.result == 'success'
+
+  stock-readers:
+    name: APK timing / stock / ${{ matrix.scenario }} / ${{ matrix.repeat }}
+    needs: cold-stock-0
+    if: always() && needs.cold-stock-0.result == 'success'
     runs-on: ubuntu-24.04
     timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        scenario: [warm, lib]
+        repeat: ['0', '1', '2']
     env:
-      SCENARIO: warm
-      APK_ARM: A
+      ENGINE: stock
+      SCENARIO: ${{ matrix.scenario }}
+      APK_REPEAT: ${{ matrix.repeat }}
+      APK_ARM: U
       APK_REPO_MODE: R0
-      APK_BAZEL_JOBS: '128'
-      APK_REPEAT: '1'
-      APK_SEED_PROOF: ${{ needs.cold-a.outputs.apk_proof }}
     steps: *workload
-  warm-a-2:
-    name: APK timing / A / warm / 2
-    needs: cold-a
-    if: always() && needs.cold-a.result == 'success'
+
+  bazel-readers:
+    name: APK timing / bazel / ${{ matrix.scenario }} / ${{ matrix.repeat }}
+    needs: cold-bazel-0
+    if: always() && needs.cold-bazel-0.result == 'success'
     runs-on: ubuntu-24.04
     timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        scenario: [warm, lib]
+        repeat: ['0', '1', '2']
     env:
-      SCENARIO: warm
-      APK_ARM: A
+      ENGINE: bazel
+      SCENARIO: ${{ matrix.scenario }}
+      APK_REPEAT: ${{ matrix.repeat }}
+      APK_ARM: U
       APK_REPO_MODE: R0
       APK_BAZEL_JOBS: '128'
-      APK_REPEAT: '2'
-      APK_SEED_PROOF: ${{ needs.cold-a.outputs.apk_proof }}
+      APK_SEED_PROOF: ${{ needs.cold-bazel-0.outputs.apk_proof }}
     steps: *workload
-  lib-a-0:
-    name: APK timing / A / lib / 0
-    needs: cold-a
-    if: always() && needs.cold-a.result == 'success'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 60
-    env:
-      SCENARIO: lib
-      APK_ARM: A
-      APK_REPO_MODE: R0
-      APK_BAZEL_JOBS: '128'
-      APK_REPEAT: '0'
-      APK_SEED_PROOF: ${{ needs.cold-a.outputs.apk_proof }}
-    steps: *workload
-  lib-a-1:
-    name: APK timing / A / lib / 1
-    needs: cold-a
-    if: always() && needs.cold-a.result == 'success'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 60
-    env:
-      SCENARIO: lib
-      APK_ARM: A
-      APK_REPO_MODE: R0
-      APK_BAZEL_JOBS: '128'
-      APK_REPEAT: '1'
-      APK_SEED_PROOF: ${{ needs.cold-a.outputs.apk_proof }}
-    steps: *workload
-  lib-a-2:
-    name: APK timing / A / lib / 2
-    needs: cold-a
-    if: always() && needs.cold-a.result == 'success'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 60
-    env:
-      SCENARIO: lib
-      APK_ARM: A
-      APK_REPO_MODE: R0
-      APK_BAZEL_JOBS: '128'
-      APK_REPEAT: '2'
-      APK_SEED_PROOF: ${{ needs.cold-a.outputs.apk_proof }}
-    steps: *workload
+
