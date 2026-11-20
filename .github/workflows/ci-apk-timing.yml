@@ -27,18 +27,16 @@ env:
 
 jobs:
   bazel-cold:
-    name: bazel / cold
-    if: github.repository == 'Sameri11/smooth-app' && github.ref == 'refs/heads/prototype/apk-repo-state'
+    name: APK timing / U / cold seed
+    if: github.repository == 'Sameri11/smooth-app' && github.ref == 'refs/heads/prototype/apk-maven-pin'
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     outputs:
       apk_proof: ${{ steps.build.outputs.apk_proof }}
-      r1_scope: ${{ steps.repo_actual.outputs.scope }}
-      r1_skip_reason: ${{ steps.repo_actual.outputs.reason }}
-      r1_sizes: ${{ steps.repo_actual.outputs.sizes }}
     env:
       SCENARIO: cold
-      APK_ARM: prebuilt
+      APK_ARM: U
+      APK_REPO_MODE: R0
       APK_BAZEL_JOBS: '128'
     steps: &workload
       - name: Start required-result clock and isolate state
@@ -57,8 +55,7 @@ jobs:
             echo "PUB_CACHE=$RUNNER_TEMP/cache-state/pub"
             echo "BAZELISK_HOME=$RUNNER_TEMP/cache-state/bazelisk"
             echo "APK_TIMING_DEADLINE_EPOCH=$(( $(date +%s) + 3300 ))"
-            echo "APK_CACHE_KEY=apk-current-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-$GITHUB_SHA-bazel-cold"
-            echo "APK_REPO_CACHE_KEY=apk-repository-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-$GITHUB_SHA"
+            echo "APK_CACHE_KEY=apk-current-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-$GITHUB_SHA-bazel-$APK_ARM-cold"
           } >> "$GITHUB_ENV"
           echo "$JAVA_HOME_17_X64/bin" >> "$GITHUB_PATH"
           df -Pk "$RUNNER_TEMP"
@@ -67,7 +64,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
-          fetch-depth: 9
+          fetch-depth: 10
       - name: Check out frozen rules
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -78,7 +75,7 @@ jobs:
       - name: Prepare isolated tracked source
         shell: bash
         run: python3 ci/apk/timing.py prepare --engine "$ENGINE" --scenario "$SCENARIO"
-      - name: Start restore clock
+      - name: Start seed restore clock
         if: env.SCENARIO != 'cold'
         shell: bash
         run: |
@@ -88,7 +85,7 @@ jobs:
           d = json.loads(p.read_text()); d['cache_download_start_epoch'] = time.time()
           p.write_text(json.dumps(d))
           PY
-      - name: Restore exact engine seed
+      - name: Restore exact arm seed
         if: env.SCENARIO != 'cold'
         id: seed
         uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
@@ -96,7 +93,7 @@ jobs:
           path: ${{ runner.temp }}/apk-timing-cache
           key: ${{ env.APK_CACHE_KEY }}
           fail-on-cache-miss: true
-      - name: Verify and unpack exact seed
+      - name: Verify and unpack exact arm seed
         if: env.SCENARIO != 'cold'
         shell: bash
         env:
@@ -117,51 +114,6 @@ jobs:
           PY
           python3 ci/apk/timing_cache.py restore --engine "$ENGINE" --scenario "$SCENARIO"
           rm -rf "$RUNNER_TEMP/apk-timing-cache"
-      - name: Start repository-cache restore clock
-        if: env.APK_REPO_MODE == 'R1' && env.APK_REPO_SCOPE != 'skipped'
-        shell: bash
-        run: |
-          python3 - <<'PY'
-          import json, os, pathlib, time
-          p=pathlib.Path(os.environ['RUNNER_TEMP'])/'apk-timing/workflow-clock.json'
-          d=json.loads(p.read_text()); d['repository_cache_restore_started_epoch']=time.time()
-          p.write_text(json.dumps(d))
-          PY
-      - name: Restore transported repository cache
-        if: env.APK_REPO_MODE == 'R1' && env.APK_REPO_SCOPE != 'skipped'
-        id: repository
-        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
-        with:
-          path: ${{ runner.temp }}/apk-timing/repository-cache-transported
-          key: ${{ env.APK_REPO_CACHE_KEY }}
-          fail-on-cache-miss: true
-      - name: Verify repository-cache restore and record duration
-        if: env.APK_REPO_MODE == 'R1' && env.APK_REPO_SCOPE != 'skipped'
-        shell: bash
-        env:
-          CACHE_HIT: ${{ steps.repository.outputs.cache-hit }}
-          MATCHED_KEY: ${{ steps.repository.outputs.cache-matched-key }}
-        run: |
-          set -euo pipefail
-          test "$CACHE_HIT" = true
-          test "$MATCHED_KEY" = "$APK_REPO_CACHE_KEY"
-          test -n "$(find "$RUNNER_TEMP/apk-timing/repository-cache-transported/content_addressable" -type f -print -quit)"
-          if [[ "$APK_REPO_SCOPE" == full ]]; then
-            test -n "$(find "$RUNNER_TEMP/apk-timing/repository-cache-transported/contents" -type f -print -quit)"
-          else
-            mkdir -p "$RUNNER_TEMP/apk-timing/repository-cache-transported/contents"
-          fi
-          python3 - <<'PY'
-          import json, os, pathlib, time
-          p=pathlib.Path(os.environ['RUNNER_TEMP'])/'apk-timing/workflow-clock.json'
-          d=json.loads(p.read_text()); d['repository_cache_restore_seconds']=time.time()-d.pop('repository_cache_restore_started_epoch')
-          d['repository_cache_matched_key']=os.environ['MATCHED_KEY']
-          p.write_text(json.dumps(d))
-          PY
-      - name: Record unavailable repository-cache arm
-        if: env.APK_REPO_MODE == 'R1' && env.APK_REPO_SCOPE == 'skipped'
-        shell: bash
-        run: python3 ci/apk/timing.py skip --engine "$ENGINE" --scenario "$SCENARIO" --reason "$APK_REPO_SKIP_REASON"
       - name: Install verified Flutter and Bazelisk
         if: env.SCENARIO == 'cold'
         shell: bash
@@ -178,7 +130,6 @@ jobs:
           echo "5a408715e932c0250d28bd84555f12edbf70117de42f9181691c736eacc4a992  $RUNNER_TEMP/bazel" | sha256sum --check
           chmod +x "$RUNNER_TEMP/bazel"
       - name: Verify tools and install pinned Android dependencies
-        if: env.APK_REPO_MODE != 'R1' || env.APK_REPO_SCOPE != 'skipped'
         shell: bash
         run: |
           set -euo pipefail
@@ -199,7 +150,6 @@ jobs:
           echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
           df -Pk "$RUNNER_TEMP"
       - name: Build and validate current APK
-        if: env.APK_REPO_MODE != 'R1' || env.APK_REPO_SCOPE != 'skipped'
         id: build
         shell: bash
         env:
@@ -210,153 +160,40 @@ jobs:
           root="$RUNNER_TEMP/apk-timing"
           trap 'rm -f "$root/remote-cache.bazelrc" "$root/logs/bep.json" "$root/logs/bazel-profile.json"' EXIT
           python3 ci/apk/timing.py run --engine "$ENGINE" --scenario "$SCENARIO"
-      - name: Pack bounded cache publication
-        if: env.APK_REPO_MODE != 'R1' || env.APK_REPO_SCOPE != 'skipped'
+      - name: Pack bounded arm seed
         id: pack
         shell: bash
-        env:
-          BAZEL_CACHE_TOKEN_RW: ${{ secrets.BAZEL_CACHE_TOKEN_RW }}
         run: python3 ci/apk/timing_cache.py pack --engine "$ENGINE" --scenario "$SCENARIO"
-      - name: Select compressed repository-cache payload
-        if: env.SCENARIO == 'cold'
-        id: repo_plan
-        shell: bash
-        run: |
-          set -euo pipefail
-          root="$RUNNER_TEMP/apk-timing"
-          transported="$root/repository-cache-transported"
-          mkdir -p "$transported"
-          python3 - <<'PY'
-          import json, os, pathlib, subprocess, sys, time
-          sys.path.insert(0,str(pathlib.Path.cwd()/'ci/apk'))
-          from timing import repository_cache_scope
-          root=pathlib.Path(os.environ['RUNNER_TEMP'])/'apk-timing'
-          repo=root/'repository-cache'; transported=root/'repository-cache-transported'
-          sizes={}
-          for name in ('content_addressable','contents'):
-              path=repo/name; path.mkdir(parents=True,exist_ok=True)
-              files=[p for p in path.rglob('*') if p.is_file()]
-              sizes[name]={'raw_bytes':sum(p.stat().st_size for p in files),'files':len(files)}
-          def compressed(names,label):
-              archive=pathlib.Path(os.environ['RUNNER_TEMP'])/f'repository-{label}.tar.zst'
-              tar=subprocess.Popen(['tar','-cf','-','-C',str(repo),*names],stdout=subprocess.PIPE)
-              with archive.open('wb') as output:
-                  zstd=subprocess.run(['zstd','-T0','--long=30','-q','-c'],stdin=tar.stdout,stdout=output)
-              tar.stdout.close()
-              if tar.wait()!=0 or zstd.returncode!=0: raise RuntimeError(f'could not compress {label} repository-cache archive')
-              return int(subprocess.check_output(['wc','-c'],stdin=archive.open(),text=True).strip()),archive
-          ca_bytes,ca_archive=compressed(['content_addressable'],'downloads')
-          contents_bytes,_=compressed(['contents'],'contents')
-          full_bytes,full_archive=compressed(['content_addressable','contents'],'full')
-          scope,selected_bytes=repository_cache_scope(full_bytes,ca_bytes)
-          def extract(archive):
-              # Frames use a 1 GiB window; tar's built-in zstd call omits --long and rejects them.
-              zstd=subprocess.Popen(['zstd','-d','--long=30','-q','-c',str(archive)],stdout=subprocess.PIPE)
-              subprocess.run(['tar','-xf','-','-C',str(transported)],stdin=zstd.stdout,check=True)
-              zstd.stdout.close()
-              if zstd.wait()!=0: raise RuntimeError(f'could not decompress {archive.name}')
-          if scope=='full':
-              extract(full_archive)
-          elif scope=='downloads':
-              extract(ca_archive)
-          sizes['content_addressable']['compressed_bytes']=ca_bytes
-          sizes['contents']['compressed_bytes']=contents_bytes
-          metrics={'r1_scope':scope,'repository_cache_sizes':{
-              'content_addressable':sizes['content_addressable'],
-              'contents':sizes['contents'],
-              'full':{'raw_bytes':sizes['content_addressable']['raw_bytes']+sizes['contents']['raw_bytes'],
-                      'files':sizes['content_addressable']['files']+sizes['contents']['files'],
-                      'compressed_bytes':full_bytes},
-              'selected':{'raw_bytes':sum(sizes[n]['raw_bytes'] for n in (('content_addressable','contents') if scope=='full' else ('content_addressable',) if scope=='downloads' else ())),
-                          'files':sum(sizes[n]['files'] for n in (('content_addressable','contents') if scope=='full' else ('content_addressable',) if scope=='downloads' else ())),
-                          'compressed_bytes':selected_bytes if scope!='skipped' else None}},
-              'repository_cache_skip_reason':None if scope!='skipped' else 'content_addressable compressed archive exceeds 3 GiB'}
-          clock=root/'workflow-clock.json'; data=json.loads(clock.read_text()); data.update(metrics); clock.write_text(json.dumps(data))
-          print(json.dumps(metrics,sort_keys=True))
-          with open(os.environ['GITHUB_OUTPUT'],'a') as out: out.write(f"scope={scope}\n")
-          with open(os.environ['GITHUB_ENV'],'a') as out:
-              out.write(f"APK_REPO_SCOPE={scope}\nAPK_REPO_SKIP_REASON={metrics['repository_cache_skip_reason'] or ''}\n")
-          PY
-      - name: Guard compressed cache capacity
-        if: steps.pack.outputs.upload == 'true'
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-          CACHE_EXPORT: ${{ steps.pack.outputs.path }}
-        run: |
-          set -euo pipefail
-          gh api "repos/$GITHUB_REPOSITORY/actions/caches?per_page=100" > "$RUNNER_TEMP/apk-cache-before.json"
-          tar -cf - -C "$CACHE_EXPORT" . | zstd -T0 --long=30 -q -c > "$RUNNER_TEMP/engine-cache.tar.zst"
-          python3 - <<'PY'
-          import json, os, pathlib, time
-          root=pathlib.Path(os.environ['RUNNER_TEMP']); p=root/'apk-timing/workflow-clock.json'
-          d=json.loads(p.read_text()); listing=json.loads((root/'apk-cache-before.json').read_text())
-          prefix='apk-current-'+os.environ['GITHUB_RUN_ID']+'-'+os.environ['GITHUB_RUN_ATTEMPT']+'-'+os.environ['GITHUB_SHA']+'-'
-          if listing['total_count']>100: raise RuntimeError('Cache listing exceeds one page')
-          if any(not c['key'].startswith(prefix) for c in listing['actions_caches']): raise RuntimeError('Unrelated caches require a new storage budget')
-          used=sum(c['size_in_bytes'] for c in listing['actions_caches'])
-          engine=(root/'engine-cache.tar.zst').stat().st_size
-          repo=d['repository_cache_sizes']['selected']['compressed_bytes'] or 0
-          d['engine_seed_compressed_bytes']=engine
-          if used+engine+repo+64*1024**2>9*1024**3: raise RuntimeError('Task cache capacity exceeded (compressed sizes)')
-          d['cache_upload_start_epoch']=time.time(); d['cache_usage_before_bytes']=used
-          p.write_text(json.dumps(d))
-          print(f"engine_seed_compressed_bytes={engine} repository_cache_compressed_bytes={repo} existing_cache_bytes={used}")
-          PY
-      - name: Publish exact bounded snapshot
+      - name: Publish exact arm seed
         if: steps.pack.outputs.upload == 'true'
         uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830
         with:
           path: ${{ steps.pack.outputs.path }}
           key: ${{ steps.pack.outputs.key }}
-      - name: Publish transported repository cache
-        if: env.SCENARIO == 'cold' && steps.repo_plan.outputs.scope != 'skipped'
-        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830
-        with:
-          path: ${{ runner.temp }}/apk-timing/repository-cache-transported
-          key: ${{ env.APK_REPO_CACHE_KEY }}
-      - name: Retain actual publication sizes and enforce cache caps
+      - name: Record and bound arm seed cache
         if: always() && env.SCENARIO == 'cold' && steps.pack.outputs.upload == 'true'
-        id: repo_actual
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
           PUBLISHED_KEY: ${{ steps.pack.outputs.key }}
-          PLAN_SCOPE: ${{ steps.repo_plan.outputs.scope }}
-          PLAN_SKIP_REASON: ${{ env.APK_REPO_SKIP_REASON }}
         run: |
           set -euo pipefail
           gh api "repos/$GITHUB_REPOSITORY/actions/caches?per_page=100" > "$RUNNER_TEMP/apk-cache-after.json"
           python3 - <<'PY'
-          import json, os, pathlib, subprocess, time
-          root=pathlib.Path(os.environ['RUNNER_TEMP']); clock=root/'apk-timing/workflow-clock.json'
-          d=json.loads(clock.read_text()); listing=json.loads((root/'apk-cache-after.json').read_text())
+          import json, os, pathlib, time
+          listing=json.loads((pathlib.Path(os.environ['RUNNER_TEMP'])/'apk-cache-after.json').read_text())
+          if listing['total_count']>100: raise RuntimeError('Cache listing exceeds one page')
           rows=[c for c in listing['actions_caches'] if c['key']==os.environ['PUBLISHED_KEY']]
-          if len(rows)!=1: raise RuntimeError('Exact engine seed entry missing/duplicated')
-          scope=os.environ.get('PLAN_SCOPE','skipped'); reason=os.environ.get('PLAN_SKIP_REASON','')
-          repo_rows=[c for c in listing['actions_caches'] if c['key']==os.environ['APK_REPO_CACHE_KEY']]
-          if len(repo_rows)>1: raise RuntimeError('Duplicate repository-cache entry')
-          if repo_rows and repo_rows[0]['size_in_bytes']>3*1024**3:
-              subprocess.run(['gh','api','-X','DELETE',f"repos/{os.environ['GITHUB_REPOSITORY']}/actions/caches/{repo_rows[0]['id']}"],check=True)
-              listing['actions_caches']=[c for c in listing['actions_caches'] if c['id']!=repo_rows[0]['id']]
-              scope='skipped'; reason='published GitHub cache entry exceeds 3 GiB'; repo_rows=[]
-          if rows[0]['size_in_bytes']>3*1024**3: raise RuntimeError('Engine seed entry exceeds 3 GiB')
-          if sum(c['size_in_bytes'] for c in listing['actions_caches'])>9*1024**3:
-              if repo_rows:
-                  subprocess.run(['gh','api','-X','DELETE',f"repos/{os.environ['GITHUB_REPOSITORY']}/actions/caches/{repo_rows[0]['id']}"],check=True)
-                  listing['actions_caches']=[c for c in listing['actions_caches'] if c['id']!=repo_rows[0]['id']]
-                  scope='skipped'; reason='published cache total exceeds 9 GiB'; repo_rows=[]
-              if sum(c['size_in_bytes'] for c in listing['actions_caches'])>9*1024**3: raise RuntimeError('Actual cache capacity exceeded after skipping repository cache')
-          d.update(cache_upload_end_epoch=time.time(),published_cache=rows[0],
-                   published_repository_cache=repo_rows[0] if repo_rows else None,
-                   r1_scope=scope,repository_cache_skip_reason=reason)
-          clock.write_text(json.dumps(d))
-          with open(os.environ['GITHUB_OUTPUT'],'a') as out:
-              out.write(f"scope={scope}\nreason={reason}\nsizes={json.dumps(d['repository_cache_sizes'],separators=(',',':'))}\n")
-          with open(os.environ['GITHUB_ENV'],'a') as out:
-              out.write(f"APK_REPO_SCOPE={scope}\nAPK_REPO_SKIP_REASON={reason}\n")
-          print(json.dumps({'r1_scope':scope,'reason':reason,'engine_entry_size_in_bytes':rows[0]['size_in_bytes'],
-                            'repository_entry_size_in_bytes':repo_rows[0]['size_in_bytes'] if repo_rows else None}))
+          if len(rows)!=1: raise RuntimeError('Exact arm seed cache missing or duplicated')
+          row=rows[0]
+          if row['size_in_bytes']>3*1024**3: raise RuntimeError('Arm seed cache exceeds 3 GiB')
+          total=sum(c['size_in_bytes'] for c in listing['actions_caches'])
+          if total>9*1024**3: raise RuntimeError('GitHub cache total exceeds 9 GiB')
+          clock=pathlib.Path(os.environ['RUNNER_TEMP'])/'apk-timing/workflow-clock.json'
+          data=json.loads(clock.read_text())
+          data.update(cache_upload_end_epoch=time.time(),published_cache=row)
+          clock.write_text(json.dumps(data))
+          print(json.dumps({'key':row['key'],'size_in_bytes':row['size_in_bytes'],'total_bytes':total}))
           PY
       - name: Shut down isolated Bazel server
         if: always()
@@ -382,204 +219,281 @@ jobs:
           APK_TIMING_JOB_STATUS: ${{ job.status }}
         run: python3 ci/apk/timing.py verify --engine "$ENGINE" --scenario "$SCENARIO"
 
-  repo-warm-r0-0:
-    name: bazel / warm / R0 / 0
+  warm-u-0:
+    name: APK timing / U / warm / 0
     needs: bazel-cold
     if: always() && needs.bazel-cold.result == 'success'
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     env:
       SCENARIO: warm
-      APK_ARM: prebuilt
-      APK_BAZEL_JOBS: '128'
+      APK_ARM: U
       APK_REPO_MODE: R0
-      APK_REPEAT: '0'
-      APK_SEED_PROOF: ${{ needs.bazel-cold.outputs.apk_proof }}
-      APK_REPO_SCOPE: ${{ needs.bazel-cold.outputs.r1_scope }}
-      APK_REPO_SKIP_REASON: ${{ needs.bazel-cold.outputs.r1_skip_reason }}
-      APK_REPO_CACHE_SIZES: ${{ needs.bazel-cold.outputs.r1_sizes }}
-    steps: *workload
-  repo-warm-r1-0:
-    name: bazel / warm / R1 / 0
-    needs: [bazel-cold, repo-warm-r0-0]
-    if: always() && needs.bazel-cold.result == 'success'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 60
-    env:
-      SCENARIO: warm
-      APK_ARM: prebuilt
       APK_BAZEL_JOBS: '128'
       APK_REPEAT: '0'
       APK_SEED_PROOF: ${{ needs.bazel-cold.outputs.apk_proof }}
-      APK_REPO_CACHE_SIZES: ${{ needs.bazel-cold.outputs.r1_sizes }}
-      APK_REPO_MODE: R1
-      APK_REPO_SCOPE: ${{ needs.bazel-cold.outputs.r1_scope }}
-      APK_REPO_SKIP_REASON: ${{ needs.bazel-cold.outputs.r1_skip_reason }}
     steps: *workload
-  repo-warm-r1-1:
-    name: bazel / warm / R1 / 1
-    needs: [bazel-cold, repo-warm-r1-0]
+  warm-u-1:
+    name: APK timing / U / warm / 1
+    needs: bazel-cold
     if: always() && needs.bazel-cold.result == 'success'
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     env:
       SCENARIO: warm
-      APK_ARM: prebuilt
+      APK_ARM: U
+      APK_REPO_MODE: R0
       APK_BAZEL_JOBS: '128'
-      APK_SEED_PROOF: ${{ needs.bazel-cold.outputs.apk_proof }}
-      APK_REPO_CACHE_SIZES: ${{ needs.bazel-cold.outputs.r1_sizes }}
-      APK_REPO_MODE: R1
-      APK_REPO_SCOPE: ${{ needs.bazel-cold.outputs.r1_scope }}
-      APK_REPO_SKIP_REASON: ${{ needs.bazel-cold.outputs.r1_skip_reason }}
       APK_REPEAT: '1'
+      APK_SEED_PROOF: ${{ needs.bazel-cold.outputs.apk_proof }}
     steps: *workload
-  repo-warm-r0-1:
-    name: bazel / warm / R0 / 1
-    needs: [bazel-cold, repo-warm-r1-1]
+  warm-u-2:
+    name: APK timing / U / warm / 2
+    needs: bazel-cold
     if: always() && needs.bazel-cold.result == 'success'
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     env:
       SCENARIO: warm
-      APK_ARM: prebuilt
-      APK_BAZEL_JOBS: '128'
+      APK_ARM: U
       APK_REPO_MODE: R0
-      APK_SEED_PROOF: ${{ needs.bazel-cold.outputs.apk_proof }}
-      APK_REPO_SCOPE: ${{ needs.bazel-cold.outputs.r1_scope }}
-      APK_REPO_SKIP_REASON: ${{ needs.bazel-cold.outputs.r1_skip_reason }}
-      APK_REPO_CACHE_SIZES: ${{ needs.bazel-cold.outputs.r1_sizes }}
-      APK_REPEAT: '1'
-    steps: *workload
-  repo-warm-r0-2:
-    name: bazel / warm / R0 / 2
-    needs: [bazel-cold, repo-warm-r0-1]
-    if: always() && needs.bazel-cold.result == 'success'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 60
-    env:
-      SCENARIO: warm
-      APK_ARM: prebuilt
       APK_BAZEL_JOBS: '128'
-      APK_REPO_MODE: R0
-      APK_SEED_PROOF: ${{ needs.bazel-cold.outputs.apk_proof }}
-      APK_REPO_SCOPE: ${{ needs.bazel-cold.outputs.r1_scope }}
-      APK_REPO_SKIP_REASON: ${{ needs.bazel-cold.outputs.r1_skip_reason }}
-      APK_REPO_CACHE_SIZES: ${{ needs.bazel-cold.outputs.r1_sizes }}
       APK_REPEAT: '2'
-    steps: *workload
-  repo-warm-r1-2:
-    name: bazel / warm / R1 / 2
-    needs: [bazel-cold, repo-warm-r0-2]
-    if: always() && needs.bazel-cold.result == 'success'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 60
-    env:
-      SCENARIO: warm
-      APK_ARM: prebuilt
-      APK_BAZEL_JOBS: '128'
       APK_SEED_PROOF: ${{ needs.bazel-cold.outputs.apk_proof }}
-      APK_REPO_CACHE_SIZES: ${{ needs.bazel-cold.outputs.r1_sizes }}
-      APK_REPO_MODE: R1
-      APK_REPO_SCOPE: ${{ needs.bazel-cold.outputs.r1_scope }}
-      APK_REPO_SKIP_REASON: ${{ needs.bazel-cold.outputs.r1_skip_reason }}
-      APK_REPEAT: '2'
     steps: *workload
-  repo-lib-r0-0:
-    name: bazel / lib / R0 / 0
-    needs: [bazel-cold, repo-warm-r1-2]
+  lib-u-0:
+    name: APK timing / U / lib / 0
+    needs: bazel-cold
     if: always() && needs.bazel-cold.result == 'success'
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     env:
-      APK_ARM: prebuilt
-      APK_BAZEL_JOBS: '128'
+      SCENARIO: lib
+      APK_ARM: U
       APK_REPO_MODE: R0
+      APK_BAZEL_JOBS: '128'
       APK_REPEAT: '0'
       APK_SEED_PROOF: ${{ needs.bazel-cold.outputs.apk_proof }}
-      APK_REPO_CACHE_SIZES: ${{ needs.bazel-cold.outputs.r1_sizes }}
-      SCENARIO: lib
     steps: *workload
-  repo-lib-r1-0:
-    name: bazel / lib / R1 / 0
-    needs: [bazel-cold, repo-lib-r0-0]
+  lib-u-1:
+    name: APK timing / U / lib / 1
+    needs: bazel-cold
     if: always() && needs.bazel-cold.result == 'success'
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     env:
-      APK_ARM: prebuilt
-      APK_BAZEL_JOBS: '128'
-      APK_SEED_PROOF: ${{ needs.bazel-cold.outputs.apk_proof }}
-      APK_REPO_CACHE_SIZES: ${{ needs.bazel-cold.outputs.r1_sizes }}
       SCENARIO: lib
-      APK_REPO_MODE: R1
-      APK_REPO_SCOPE: ${{ needs.bazel-cold.outputs.r1_scope }}
-      APK_REPO_SKIP_REASON: ${{ needs.bazel-cold.outputs.r1_skip_reason }}
-    steps: *workload
-  repo-lib-r1-1:
-    name: bazel / lib / R1 / 1
-    needs: [bazel-cold, repo-lib-r1-0]
-    if: always() && needs.bazel-cold.result == 'success'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 60
-    env:
-      APK_ARM: prebuilt
-      APK_BAZEL_JOBS: '128'
-      APK_SEED_PROOF: ${{ needs.bazel-cold.outputs.apk_proof }}
-      APK_REPO_CACHE_SIZES: ${{ needs.bazel-cold.outputs.r1_sizes }}
-      SCENARIO: lib
-      APK_REPO_MODE: R1
-      APK_REPO_SCOPE: ${{ needs.bazel-cold.outputs.r1_scope }}
-      APK_REPO_SKIP_REASON: ${{ needs.bazel-cold.outputs.r1_skip_reason }}
-      APK_REPEAT: '1'
-    steps: *workload
-  repo-lib-r0-1:
-    name: bazel / lib / R0 / 1
-    needs: [bazel-cold, repo-lib-r1-1]
-    if: always() && needs.bazel-cold.result == 'success'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 60
-    env:
-      APK_ARM: prebuilt
-      APK_BAZEL_JOBS: '128'
+      APK_ARM: U
       APK_REPO_MODE: R0
-      APK_SEED_PROOF: ${{ needs.bazel-cold.outputs.apk_proof }}
-      APK_REPO_SCOPE: ${{ needs.bazel-cold.outputs.r1_scope }}
-      APK_REPO_SKIP_REASON: ${{ needs.bazel-cold.outputs.r1_skip_reason }}
-      APK_REPO_CACHE_SIZES: ${{ needs.bazel-cold.outputs.r1_sizes }}
-      SCENARIO: lib
+      APK_BAZEL_JOBS: '128'
       APK_REPEAT: '1'
+      APK_SEED_PROOF: ${{ needs.bazel-cold.outputs.apk_proof }}
     steps: *workload
-  repo-lib-r0-2:
-    name: bazel / lib / R0 / 2
-    needs: [bazel-cold, repo-lib-r0-1]
+  lib-u-2:
+    name: APK timing / U / lib / 2
+    needs: bazel-cold
     if: always() && needs.bazel-cold.result == 'success'
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     env:
-      APK_ARM: prebuilt
-      APK_BAZEL_JOBS: '128'
+      SCENARIO: lib
+      APK_ARM: U
       APK_REPO_MODE: R0
-      APK_SEED_PROOF: ${{ needs.bazel-cold.outputs.apk_proof }}
-      APK_REPO_SCOPE: ${{ needs.bazel-cold.outputs.r1_scope }}
-      APK_REPO_SKIP_REASON: ${{ needs.bazel-cold.outputs.r1_skip_reason }}
-      APK_REPO_CACHE_SIZES: ${{ needs.bazel-cold.outputs.r1_sizes }}
-      SCENARIO: lib
+      APK_BAZEL_JOBS: '128'
       APK_REPEAT: '2'
+      APK_SEED_PROOF: ${{ needs.bazel-cold.outputs.apk_proof }}
     steps: *workload
-  repo-lib-r1-2:
-    name: bazel / lib / R1 / 2
-    needs: [bazel-cold, repo-lib-r0-2]
-    if: always() && needs.bazel-cold.result == 'success'
+  cold-f:
+    name: APK timing / F / cold seed
+    if: github.repository == 'Sameri11/smooth-app' && github.ref == 'refs/heads/prototype/apk-maven-pin'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    outputs:
+      apk_proof: ${{ steps.build.outputs.apk_proof }}
+    env:
+      SCENARIO: cold
+      APK_ARM: F
+      APK_REPO_MODE: R0
+      APK_BAZEL_JOBS: '128'
+    steps: *workload
+  warm-f-0:
+    name: APK timing / F / warm / 0
+    needs: cold-f
+    if: always() && needs.cold-f.result == 'success'
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     env:
-      APK_ARM: prebuilt
+      SCENARIO: warm
+      APK_ARM: F
+      APK_REPO_MODE: R0
       APK_BAZEL_JOBS: '128'
-      APK_SEED_PROOF: ${{ needs.bazel-cold.outputs.apk_proof }}
-      APK_REPO_CACHE_SIZES: ${{ needs.bazel-cold.outputs.r1_sizes }}
-      SCENARIO: lib
-      APK_REPO_MODE: R1
-      APK_REPO_SCOPE: ${{ needs.bazel-cold.outputs.r1_scope }}
-      APK_REPO_SKIP_REASON: ${{ needs.bazel-cold.outputs.r1_skip_reason }}
+      APK_REPEAT: '0'
+      APK_SEED_PROOF: ${{ needs.cold-f.outputs.apk_proof }}
+    steps: *workload
+  warm-f-1:
+    name: APK timing / F / warm / 1
+    needs: cold-f
+    if: always() && needs.cold-f.result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      SCENARIO: warm
+      APK_ARM: F
+      APK_REPO_MODE: R0
+      APK_BAZEL_JOBS: '128'
+      APK_REPEAT: '1'
+      APK_SEED_PROOF: ${{ needs.cold-f.outputs.apk_proof }}
+    steps: *workload
+  warm-f-2:
+    name: APK timing / F / warm / 2
+    needs: cold-f
+    if: always() && needs.cold-f.result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      SCENARIO: warm
+      APK_ARM: F
+      APK_REPO_MODE: R0
+      APK_BAZEL_JOBS: '128'
       APK_REPEAT: '2'
+      APK_SEED_PROOF: ${{ needs.cold-f.outputs.apk_proof }}
+    steps: *workload
+  lib-f-0:
+    name: APK timing / F / lib / 0
+    needs: cold-f
+    if: always() && needs.cold-f.result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      SCENARIO: lib
+      APK_ARM: F
+      APK_REPO_MODE: R0
+      APK_BAZEL_JOBS: '128'
+      APK_REPEAT: '0'
+      APK_SEED_PROOF: ${{ needs.cold-f.outputs.apk_proof }}
+    steps: *workload
+  lib-f-1:
+    name: APK timing / F / lib / 1
+    needs: cold-f
+    if: always() && needs.cold-f.result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      SCENARIO: lib
+      APK_ARM: F
+      APK_REPO_MODE: R0
+      APK_BAZEL_JOBS: '128'
+      APK_REPEAT: '1'
+      APK_SEED_PROOF: ${{ needs.cold-f.outputs.apk_proof }}
+    steps: *workload
+  lib-f-2:
+    name: APK timing / F / lib / 2
+    needs: cold-f
+    if: always() && needs.cold-f.result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      SCENARIO: lib
+      APK_ARM: F
+      APK_REPO_MODE: R0
+      APK_BAZEL_JOBS: '128'
+      APK_REPEAT: '2'
+      APK_SEED_PROOF: ${{ needs.cold-f.outputs.apk_proof }}
+    steps: *workload
+  cold-a:
+    name: APK timing / A / cold seed
+    if: github.repository == 'Sameri11/smooth-app' && github.ref == 'refs/heads/prototype/apk-maven-pin'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    outputs:
+      apk_proof: ${{ steps.build.outputs.apk_proof }}
+    env:
+      SCENARIO: cold
+      APK_ARM: A
+      APK_REPO_MODE: R0
+      APK_BAZEL_JOBS: '128'
+    steps: *workload
+  warm-a-0:
+    name: APK timing / A / warm / 0
+    needs: cold-a
+    if: always() && needs.cold-a.result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      SCENARIO: warm
+      APK_ARM: A
+      APK_REPO_MODE: R0
+      APK_BAZEL_JOBS: '128'
+      APK_REPEAT: '0'
+      APK_SEED_PROOF: ${{ needs.cold-a.outputs.apk_proof }}
+    steps: *workload
+  warm-a-1:
+    name: APK timing / A / warm / 1
+    needs: cold-a
+    if: always() && needs.cold-a.result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      SCENARIO: warm
+      APK_ARM: A
+      APK_REPO_MODE: R0
+      APK_BAZEL_JOBS: '128'
+      APK_REPEAT: '1'
+      APK_SEED_PROOF: ${{ needs.cold-a.outputs.apk_proof }}
+    steps: *workload
+  warm-a-2:
+    name: APK timing / A / warm / 2
+    needs: cold-a
+    if: always() && needs.cold-a.result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      SCENARIO: warm
+      APK_ARM: A
+      APK_REPO_MODE: R0
+      APK_BAZEL_JOBS: '128'
+      APK_REPEAT: '2'
+      APK_SEED_PROOF: ${{ needs.cold-a.outputs.apk_proof }}
+    steps: *workload
+  lib-a-0:
+    name: APK timing / A / lib / 0
+    needs: cold-a
+    if: always() && needs.cold-a.result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      SCENARIO: lib
+      APK_ARM: A
+      APK_REPO_MODE: R0
+      APK_BAZEL_JOBS: '128'
+      APK_REPEAT: '0'
+      APK_SEED_PROOF: ${{ needs.cold-a.outputs.apk_proof }}
+    steps: *workload
+  lib-a-1:
+    name: APK timing / A / lib / 1
+    needs: cold-a
+    if: always() && needs.cold-a.result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      SCENARIO: lib
+      APK_ARM: A
+      APK_REPO_MODE: R0
+      APK_BAZEL_JOBS: '128'
+      APK_REPEAT: '1'
+      APK_SEED_PROOF: ${{ needs.cold-a.outputs.apk_proof }}
+    steps: *workload
+  lib-a-2:
+    name: APK timing / A / lib / 2
+    needs: cold-a
+    if: always() && needs.cold-a.result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      SCENARIO: lib
+      APK_ARM: A
+      APK_REPO_MODE: R0
+      APK_BAZEL_JOBS: '128'
+      APK_REPEAT: '2'
+      APK_SEED_PROOF: ${{ needs.cold-a.outputs.apk_proof }}
     steps: *workload

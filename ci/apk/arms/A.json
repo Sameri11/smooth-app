@@ -1,0 +1,1 @@
+{"foreign_cc":{"make":{"mode":"noop"},"m4":{"mode":"noop"},"pkgconfig":{"mode":"noop"}},"maven_installs":["flutter_maven","flutter_maven_debug","rules_android_maven","android_ide_common_30_1_3","bazel_worker_maven"],"prefer_prebuilt_protoc":true}

@@ -32,11 +32,24 @@ SDK = Path(os.environ.get("RUNNER_TEMP", tempfile.gettempdir())) / "flutter"
 PUB = Path(os.environ.get("RUNNER_TEMP", tempfile.gettempdir())) / "cache-state" / "pub"
 BAZELISK = Path(os.environ.get("RUNNER_TEMP", tempfile.gettempdir())) / "cache-state" / "bazelisk"
 WORKLOAD_HEAD = "6e7408fda8e46bc97a0d8f2b33a801cf27c8dabe"
-PREVIOUS_HARNESS_HEAD = "e8da5ba5c3e8ca432006fedfb9a52e5477cddbb2"
+PREVIOUS_HARNESS_HEAD = "50c6178f1f0239ddaee7afd4adb324dab0e977e9"
+ARMS = ("U", "F", "A")
+HUB_REPOSITORIES = (
+    "flutter_maven", "flutter_maven_debug", "rules_android_maven",
+    "android_ide_common_30_1_3", "bazel_worker_maven",
+)
 HARNESS_FILES = {
     ".github/workflows/ci-apk-timing.yml", "ci/apk/timing.py", "ci/apk/timing_cache.py",
-    "ci/apk/maven-downloader.cfg", "MODULE.bazel", "ci/apk/arms/prebuilt.json", "ci/apk/arms/src.json",
-    "ci/apk/arms/prebuilt.MODULE.bazel.lock", "ci/apk/arms/src.MODULE.bazel.lock",
+    "ci/apk/maven-downloader.cfg", "MODULE.bazel",
+    *(f"ci/apk/arms/{arm}.json" for arm in ARMS),
+    *(f"ci/apk/arms/{arm}_{repo}.json" for arm, repos in {
+        "F": ("flutter_maven", "flutter_maven_debug"),
+        "A": HUB_REPOSITORIES,
+    }.items() for repo in repos),
+    *(f"ci/apk/arms/{arm}.MODULE.bazel.lock" for arm in ARMS),
+    # Host-tool arm files inherited from the previous harness stay committed.
+    *(f"ci/apk/arms/{arm}{suffix}" for arm in ("prebuilt", "src")
+      for suffix in (".json", ".MODULE.bazel.lock")),
 }
 PROFILE_PHASES = {
     "Launch Blaze", "Initialize command", "Evaluate target patterns",
@@ -56,7 +69,10 @@ APK_REL = "packages/smooth_app/build/app/outputs/flutter-apk/app-debug.apk"
 APK_TARGET = "//packages/smooth_app/android/app:smooth_app"
 SCENARIOS = ("cold", "warm", "lib")
 ENGINES = ("stock", "bazel")
-
+ARTIFACT_REPOSITORY_PATTERN = re.compile(
+    r"^@@rules_jvm_external\+\+maven\+(?!flutter_maven$|flutter_maven_debug$|"
+    r"rules_android_maven$|android_ide_common_30_1_3$|bazel_worker_maven$).+"
+)
 
 def digest(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
@@ -322,14 +338,83 @@ def tracked_tree(engine, arm="src"):
         if not rules.is_dir():
             raise RuntimeError("frozen .ci-rules checkout is absent")
         shutil.copytree(rules, tree / ".ci-rules", symlinks=True, ignore=shutil.ignore_patterns(".git"))
-        if arm not in ("src", "prebuilt"):
-            raise RuntimeError("APK_ARM must be src or prebuilt")
+        if arm not in ARMS:
+            raise RuntimeError(f"APK_ARM must be one of {', '.join(ARMS)}")
         shutil.copy2(WS / "MODULE.bazel", tree / "MODULE.bazel")
-        arm_lock = WS / "ci/apk/arms" / f"{arm}.MODULE.bazel.lock"
-        shutil.copy2(arm_lock if arm_lock.is_file() else WS / "MODULE.bazel.lock",
-                     tree / "MODULE.bazel.lock")
-        arm_config = json.loads((WS / "ci/apk/arms" / f"{arm}.json").read_text())
         module = (tree / "MODULE.bazel").read_text()
+        arm_config = json.loads((WS / "ci/apk/arms" / f"{arm}.json").read_text())
+        lock_name = f"{arm}.MODULE.bazel.lock"
+        arm_lock = WS / "ci/apk/arms" / lock_name
+        if not arm_lock.is_file():
+            raise RuntimeError(f"missing {arm} MODULE.bazel.lock")
+        shutil.copy2(arm_lock, tree / "MODULE.bazel.lock")
+        installs = arm_config["maven_installs"]
+        if not isinstance(installs, list) or any(
+                not isinstance(repo, str) or not re.fullmatch(r"[a-z0-9_]+", repo)
+                for repo in installs):
+            raise RuntimeError(f"invalid maven_installs in {arm} arm configuration")
+        overlay_start = module.find("# Per-job Maven locks are selected by ci/apk/timing.py.")
+        overlay_end = module.find("# Android preferences classes replace", overlay_start)
+        if overlay_start < 0 or overlay_end < 0:
+            raise RuntimeError("Maven lock overlay section markers are missing")
+        overlay = module[overlay_start:overlay_end]
+        install_pattern = re.compile(r"maven\.install\(\s*name\s*=\s*\"([a-z0-9_]+)\"")
+        selected_install_names = set(installs)
+        matches = list(install_pattern.finditer(overlay))
+        for match in reversed(matches):
+            name = match.group(1)
+            start = match.start()
+            depth = 0
+            quote = None
+            escaped = False
+            end = None
+            for index in range(overlay.index("(", start), len(overlay)):
+                char = overlay[index]
+                if quote:
+                    if escaped:
+                        escaped = False
+                    elif char == "\\":
+                        escaped = True
+                    elif char == quote:
+                        quote = None
+                elif char in ("'", '"'):
+                    quote = char
+                elif char == "(":
+                    depth += 1
+                elif char == ")":
+                    depth -= 1
+                    if depth == 0:
+                        end = index + 1
+                        break
+            if end is None:
+                raise RuntimeError(f"unterminated Maven install {name}")
+            if name not in selected_install_names:
+                overlay = overlay[:start] + overlay[end:]
+            else:
+                block = overlay[start:end]
+                block, count = re.subn(
+                    r'lock_file\s*=\s*"//:ci/apk/arms/[^"]+"',
+                    f'lock_file = "//:ci/apk/arms/{arm}_{name}.json"', block, count=1)
+                if count != 1:
+                    raise RuntimeError(f"missing lock_file for Maven install {name}")
+                overlay = overlay[:start] + block + overlay[end:]
+        if selected_install_names != {
+                match.group(1) for match in install_pattern.finditer(overlay)}:
+            raise RuntimeError("maven_installs does not match MODULE.bazel overlay installs")
+        module = module[:overlay_start] + overlay + module[overlay_end:]
+        if arm == "A":
+            base_import = 'use_repo(maven, "flutter_maven")'
+            if module.count(base_import) != 1:
+                raise RuntimeError("could not expose the A arm Maven repositories")
+            module = module.replace(
+                base_import,
+                'use_repo(maven, "flutter_maven", "rules_android_maven", '
+                '"android_ide_common_30_1_3", "bazel_worker_maven")', 1)
+        arm_files = tree / "ci/apk/arms"
+        arm_files.mkdir(parents=True, exist_ok=True)
+        for repo in installs:
+            shutil.copy2(WS / "ci/apk/arms" / f"{arm}_{repo}.json",
+                         arm_files / f"{arm}_{repo}.json")
         # CMake/Ninja stay registered for the JNI -GNinja invocation.
         for tool, setting in arm_config["foreign_cc"].items():
             call = f'foreign_cc_tools.{tool}(mode = "{setting["mode"]}"'
@@ -376,8 +461,8 @@ def requested_download_outputs(engine, scenario):
 def requested_bazel_jobs(engine, scenario):
     if engine != "bazel":
         return None
-    if os.environ.get("APK_ARM") not in ("src", "prebuilt"):
-        raise RuntimeError("APK_ARM must be src or prebuilt")
+    if os.environ.get("APK_ARM") not in ARMS:
+        raise RuntimeError(f"APK_ARM must be one of {', '.join(ARMS)}")
     jobs = os.environ.get("APK_BAZEL_JOBS")
     if jobs != "128":
         raise RuntimeError("all host-tool rows require APK_BAZEL_JOBS=128")
@@ -387,7 +472,7 @@ def requested_bazel_jobs(engine, scenario):
 def proof_identity(identity):
     run, attempt, head, arm = (identity[key] for key in ("run_id", "attempt", "head", "arm"))
     if not (re.fullmatch(r"[0-9]+", run) and re.fullmatch(r"[0-9]+", attempt)
-            and re.fullmatch(r"[0-9a-f]{40}", head) and arm in ("src", "prebuilt")):
+            and re.fullmatch(r"[0-9a-f]{40}", head) and arm in ARMS):
         raise RuntimeError("APK proof requires exact run, attempt, commit and arm identity")
     return f"{run}/{attempt}/{head}/{arm}"
 
@@ -426,9 +511,9 @@ def cmd_prepare(args):
     ROOT.mkdir(parents=True, exist_ok=True)
     head = dispatch_head()
     manifest = verify_frozen()
-    arm = os.environ.get("APK_ARM")
-    if arm not in ("src", "prebuilt"):
-        raise RuntimeError("APK_ARM must be src or prebuilt")
+    arm = args.arm or os.environ.get("APK_ARM")
+    if arm not in ARMS:
+        raise RuntimeError(f"APK_ARM must be one of {', '.join(ARMS)}")
     tree = tracked_tree(args.engine, arm)
     verify_frozen(tree)
     state = {"schema": 1, "kind": "smooth-current-debug-apk-timing", "status": "prepared",
@@ -495,8 +580,8 @@ def run_remote_config(state):
     if (not re.fullmatch(r"[0-9]+", identity_values[0])
             or not re.fullmatch(r"[0-9]+", identity_values[1])
             or not re.fullmatch(r"[0-9a-f]{40}", identity_values[2])
-            or state["identity"].get("arm") != "prebuilt"):
-        raise RuntimeError("remote salt requires numeric run/attempt, exact head and the prebuilt arm")
+            or state["identity"].get("arm") not in ARMS):
+        raise RuntimeError("remote salt requires numeric run/attempt, exact head and supported arm")
     salt = "/".join(identity_values)
     rc = ROOT / "remote-cache.bazelrc"
     rc_text = "".join("build " + shlex.quote(x) + "\n" for x in (
@@ -538,8 +623,7 @@ def bazel_argv(root, command_name, env, *, bep=None, remote=True, extra=()):
              "--tool_java_runtime_version=remotejdk_17", "--java_language_version=17",
              "--java_runtime_version=remotejdk_17", "--desugar_java8_libs", "--color=no", "--curses=no",
              "--jobs=128", "--experimental_record_metrics_for_all_mnemonics",
-             *(["--@@protobuf+//bazel/toolchains:prefer_prebuilt_protoc"]
-               if _ACTIVE_STATE["identity"]["arm"] == "prebuilt" else []),
+             "--@@protobuf+//bazel/toolchains:prefer_prebuilt_protoc",
              *extra]
     if remote:
         policy = _ACTIVE_STATE["remote_cache"]
@@ -709,8 +793,11 @@ def collect_profile(path):
         remote_categories = {key: {"event_count": 0, "max_event_span_seconds": 0.0}
                              for key in sorted(REMOTE_PROFILE_CATEGORIES)}
         fetch_spans, download_spans, fetch_by_repository = [], [], {}
-        action_duration = 0.0
+        hub_fetches = {repository: [] for repository in HUB_REPOSITORIES}
+        artifact_fetches = []
         action_count = 0
+        action_duration = 0.0
+        download_end = download_union = 0.0
         profile_end = max((event["ts"] + event.get("dur", 0)
                            for event in events if isinstance(event, dict)
                            and isinstance(event.get("ts"), (int, float))
@@ -743,6 +830,10 @@ def collect_profile(path):
                     repository = name if isinstance(name, str) and name else "unknown"
                 bucket = fetch_by_repository.setdefault(repository, [])
                 bucket.append((float(ts), float(ts + duration)))
+                if repository in hub_fetches:
+                    hub_fetches[repository].append((float(ts), float(ts + duration)))
+                if ARTIFACT_REPOSITORY_PATTERN.search(repository):
+                    artifact_fetches.append((float(ts), float(ts + duration)))
             elif category == "remote output download":
                 download_spans.append((float(ts), float(ts + duration)))
             if category == "action processing":
@@ -778,7 +869,11 @@ def collect_profile(path):
                 "union_seconds": round(union_seconds(spans), 6),
             })
         repository_fetches.sort(key=lambda row: (-row["union_seconds"], row["repository"]))
-        download_end = download_union = 0.0
+        hub_repository_fetches = {
+            repository: {"event_count": len(spans),
+                         "union_seconds": round(union_seconds(spans), 6)}
+            for repository, spans in hub_fetches.items()
+        }
         for start, end in sorted(download_spans):
             download_union += max(0.0, end - max(start, download_end))
             download_end = max(download_end, end)
@@ -800,6 +895,9 @@ def collect_profile(path):
             "repository_fetch_top": repository_fetches[:30],
             "repository_fetch_count": len(fetch_spans),
             "repository_fetch_union_seconds": round(fetch_union, 6),
+            "hub_repository_fetches": hub_repository_fetches,
+            "artifact_http_file_fetch_count": len(artifact_fetches),
+            "artifact_http_file_fetch_union_seconds": round(union_seconds(artifact_fetches), 6),
             "action_event_count": action_count,
             "action_concurrency_peak": peak_concurrent,
             "action_duration_sum_seconds": round(action_duration / 1_000_000, 6),
@@ -888,7 +986,7 @@ def cmd_run(args):
     head = dispatch_head()
     if ident["head"] != head:
         raise RuntimeError("checkout HEAD/GITHUB_SHA identity changed")
-    if ident.get("arm") != os.environ.get("APK_ARM"):
+    if ident.get("arm") != (args.arm or os.environ.get("APK_ARM")):
         raise RuntimeError("APK_ARM differs from prepared identity")
     mode = requested_download_outputs(args.engine, args.scenario)
     jobs = requested_bazel_jobs(args.engine, args.scenario)
@@ -1009,7 +1107,7 @@ def cmd_run(args):
                 if match:
                     selected_proto_toolchains.append(match.group(1))
             state["protoc_selection"] = {
-                "prefer_prebuilt_protoc_flag": os.environ.get("APK_ARM") == "prebuilt",
+                "prefer_prebuilt_protoc_flag": True,
                 "selected_proto_toolchain": selected_proto_toolchains[-1] if selected_proto_toolchains else None,
                 "prebuilt_protoc_selected": any("prebuilt_protoc." in label for label in selected_proto_toolchains),
                 "action_count": len(actions),
@@ -1185,7 +1283,8 @@ def cmd_verify(_args):
            or str(op.get("run_attempt")) != str(ident.get("attempt")) or op.get("engine") != ident.get("engine")
            or op.get("scenario") != ident.get("scenario") for op in operations):
         issues.append("cache operation provenance mismatch")
-    cold_key = f"apk-current-{ident.get('run_id')}-{ident.get('attempt')}-{ident.get('head')}-{ident.get('engine')}-cold"
+    cache_arm = f"-{ident.get('arm')}" if ident.get("engine") == "bazel" else ""
+    cold_key = f"apk-current-{ident.get('run_id')}-{ident.get('attempt')}-{ident.get('head')}-{ident.get('engine')}{cache_arm}-cold"
     if ident.get("scenario") != "cold":
         if clock.get("cache_hit") is not True or clock.get("cache_matched_key") != cold_key or clock.get("cache_expected_key") != cold_key:
             issues.append("exact cache restore hit/provenance missing")
@@ -1200,7 +1299,7 @@ def cmd_verify(_args):
         suffix = "cold" if ident.get("scenario") == "cold" else "lib"
         expected_key = (
             f"apk-current-{ident.get('run_id')}-{ident.get('attempt')}-"
-            f"{ident.get('head')}-{ident.get('engine')}-{suffix}"
+            f"{ident.get('head')}-{ident.get('engine')}{cache_arm}-{suffix}"
         )
         if packed[-1].get("key") != expected_key:
             issues.append("cache publication key mismatch")
@@ -1222,6 +1321,7 @@ def main():
         item = sub.add_parser(name)
         item.add_argument("--engine", choices=ENGINES, required=True)
         item.add_argument("--scenario", choices=SCENARIOS, required=True)
+        item.add_argument("--arm", choices=ARMS)
         if name == "skip":
             item.add_argument("--reason", required=True)
     args = parser.parse_args()

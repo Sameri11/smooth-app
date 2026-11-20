@@ -127,7 +127,8 @@ class GuardedReader:
         out, self.buf = self.buf[:n], self.buf[n:]; return out
 
 def key(engine, scenario):
-    return f"apk-current-{required_env('GITHUB_RUN_ID')}-{required_env('GITHUB_RUN_ATTEMPT')}-{required_env('GITHUB_SHA')}-{engine}-cold"
+    arm = f"-{required_env('APK_ARM')}" if engine == "bazel" else ""
+    return f"apk-current-{required_env('GITHUB_RUN_ID')}-{required_env('GITHUB_RUN_ATTEMPT')}-{required_env('GITHUB_SHA')}-{engine}{arm}-cold"
 
 def identity(engine, scenario):
     return {"schema": 1, "engine": engine, "scenario": scenario, "head": required_env("GITHUB_SHA"), "run_id": required_env("GITHUB_RUN_ID"), "run_attempt": required_env("GITHUB_RUN_ATTEMPT"), "arm": required_env("APK_ARM") if engine == "bazel" else None, "ancestor": "cold" if scenario in ("warm", "lib") else "self"}
