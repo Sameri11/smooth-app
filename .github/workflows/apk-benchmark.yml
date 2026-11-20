@@ -1,0 +1,394 @@
+name: Stock vs Bazel debug APK benchmark
+
+on:
+  workflow_dispatch:
+    inputs:
+      rules_ref:
+        description: rules_flutter branch, tag, or commit
+        required: true
+        default: main
+        type: string
+      app_ref:
+        description: smooth-app commit to benchmark
+        required: true
+        default: 6e7408fda8e46bc97a0d8f2b33a801cf27c8dabe
+        type: string
+      repeats:
+        description: Repeats per engine and scenario (1–5)
+        required: true
+        default: '3'
+        type: choice
+        options: ['1', '2', '3', '4', '5']
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: stock-bazel-apk-benchmark
+  cancel-in-progress: false
+
+env:
+  CI: 'true'
+  FLUTTER_SUPPRESS_ANALYTICS: 'true'
+
+jobs:
+  resolve-rules:
+    name: Resolve rules revision
+    runs-on: ubuntu-24.04
+    outputs:
+      rules_sha: ${{ steps.resolve.outputs.sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: Sameri11/rules_flutter
+          ref: ${{ inputs.rules_ref || 'main' }}
+          path: rules
+          persist-credentials: false
+      - id: resolve
+        shell: bash
+        run: echo "sha=$(git -C rules rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+  prepare-lock:
+    name: Prepare shared Bazel module lock
+    needs: resolve-rules
+    if: github.repository == 'Sameri11/smooth-app'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    outputs:
+      rules_sha: ${{ needs.resolve-rules.outputs.rules_sha }}
+      module_lock: ${{ steps.probe.outputs.module_lock }}
+      lock_metadata: ${{ steps.probe.outputs.lock_metadata }}
+    steps:
+      - name: Set up preparation paths
+        shell: bash
+        env:
+          RULES_SHA: ${{ needs.resolve-rules.outputs.rules_sha }}
+        run: |
+          set -euo pipefail
+          {
+            echo "APK_APP_ROOT=$GITHUB_WORKSPACE/app"
+            echo "RULES_SHA=$RULES_SHA"
+            echo "JAVA_HOME=$JAVA_HOME_17_X64"
+            echo "FLUTTER_ROOT=$RUNNER_TEMP/flutter"
+            echo "BAZELISK_HOME=$RUNNER_TEMP/cache-state/bazelisk"
+          } >> "$GITHUB_ENV"
+          echo "$JAVA_HOME_17_X64/bin" >> "$GITHUB_PATH"
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ inputs.app_ref || '6e7408fda8e46bc97a0d8f2b33a801cf27c8dabe' }}
+          path: app
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          path: benchmark-source
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: Sameri11/rules_flutter
+          ref: ${{ needs.resolve-rules.outputs.rules_sha }}
+          path: app/.ci-rules
+          persist-credentials: false
+      - name: Install pinned Flutter and Bazelisk
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/cache-state/pub" "$BAZELISK_HOME"
+          curl --fail --location --retry 2 --output "$RUNNER_TEMP/flutter.tar.xz" https://storage.googleapis.com/flutter_infra_release/releases/stable/linux/flutter_linux_3.41.8-stable.tar.xz
+          echo "0c7e47fc39ef86290b41707d687bdca7f82b277267a6ef74717f8e88ac423de1  $RUNNER_TEMP/flutter.tar.xz" | sha256sum --check
+          tar -xJf "$RUNNER_TEMP/flutter.tar.xz" -C "$RUNNER_TEMP"
+          rm "$RUNNER_TEMP/flutter.tar.xz"
+          curl --fail --location --retry 2 --output "$RUNNER_TEMP/bazel" https://github.com/bazelbuild/bazelisk/releases/download/v1.29.0/bazelisk-linux-amd64
+          echo "5a408715e932c0250d28bd84555f12edbf70117de42f9181691c736eacc4a992  $RUNNER_TEMP/bazel" | sha256sum --check
+          chmod +x "$RUNNER_TEMP/bazel"
+      - name: Install pinned Android dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git -C "$FLUTTER_ROOT" rev-parse HEAD)" = 02085feb3f5d8a8156e5e28512b9d99351d510c0
+          "$FLUTTER_ROOT/bin/flutter" precache --android
+          extension="$FLUTTER_ROOT/packages/flutter_tools/gradle/src/main/kotlin/FlutterExtension.kt"
+          ndk="$(python3 -c 'import pathlib,re,sys; print(re.search(r"val ndkVersion: String = \"([^\"]+)\"", pathlib.Path(sys.argv[1]).read_text()).group(1))' "$extension")"
+          api="$(python3 -c 'import pathlib,re,sys; print(re.search(r"val compileSdkVersion: Int = (\d+)", pathlib.Path(sys.argv[1]).read_text()).group(1))' "$extension")"
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-$api" "build-tools;$api.0.0" "ndk;$ndk"
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/$ndk" >> "$GITHUB_ENV"
+      - name: Probe and export the shared module lock
+        id: probe
+        shell: bash
+        run: python3 benchmark-source/ci/benchmark/timing.py prepare-lock
+
+  cold-stock-0:
+    name: APK timing / stock / cold / 0
+    needs: prepare-lock
+    if: github.repository == 'Sameri11/smooth-app'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env: { ENGINE: stock, SCENARIO: cold, APK_REPEAT: '0' }
+    outputs:
+      apk_proof: ${{ steps.build.outputs.apk_proof }}
+    steps: &workload
+      - name: Start required-result clock and isolate state
+        shell: bash
+        env:
+          RULES_SHA: ${{ needs.prepare-lock.outputs.rules_sha }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/apk-timing/home"
+          echo "APK_APP_ROOT=$GITHUB_WORKSPACE/app" >> "$GITHUB_ENV"
+          echo "RULES_SHA=$RULES_SHA" >> "$GITHUB_ENV"
+          python3 - <<'PY'
+          import json, os, pathlib, time
+          p=pathlib.Path(os.environ['RUNNER_TEMP'])/'apk-timing/workflow-clock.json'
+          p.write_text(json.dumps({'job_start_epoch':time.time()}))
+          PY
+          {
+            echo "JAVA_HOME=$JAVA_HOME_17_X64"
+            echo "FLUTTER_ROOT=$RUNNER_TEMP/flutter"
+            echo "PUB_CACHE=$RUNNER_TEMP/cache-state/pub"
+            echo "BAZELISK_HOME=$RUNNER_TEMP/cache-state/bazelisk"
+            echo "APK_TIMING_DEADLINE_EPOCH=$(( $(date +%s) + 3300 ))"
+            echo "APK_CACHE_KEY=apk-current-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-$GITHUB_SHA-$ENGINE-cold"
+          } >> "$GITHUB_ENV"
+          echo "$JAVA_HOME_17_X64/bin" >> "$GITHUB_PATH"
+          sudo rm -rf /usr/share/dotnet /usr/local/swift /opt/ghc /opt/hostedtoolcache/CodeQL
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ inputs.app_ref || '6e7408fda8e46bc97a0d8f2b33a801cf27c8dabe' }}
+          path: app
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          path: benchmark-source
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        if: env.ENGINE == 'bazel'
+        with:
+          repository: Sameri11/rules_flutter
+          ref: ${{ needs.prepare-lock.outputs.rules_sha }}
+          path: app/.ci-rules
+          persist-credentials: false
+      - name: Prepare isolated tracked source with shared lock
+        shell: bash
+        env:
+          APK_MODULE_LOCK_B64: ${{ needs.prepare-lock.outputs.module_lock }}
+          APK_LOCK_METADATA: ${{ needs.prepare-lock.outputs.lock_metadata }}
+        run: python3 benchmark-source/ci/benchmark/timing.py prepare --engine "$ENGINE" --scenario "$SCENARIO"
+      - name: Start seed restore clock
+        if: env.SCENARIO != 'cold'
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json, os, pathlib, time
+          p=pathlib.Path(os.environ['RUNNER_TEMP'])/'apk-timing/workflow-clock.json'
+          d=json.loads(p.read_text());d['cache_download_start_epoch']=time.time();p.write_text(json.dumps(d))
+          PY
+      - name: Restore exact engine seed
+        if: env.SCENARIO != 'cold'
+        id: seed
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
+        with:
+          path: ${{ runner.temp }}/apk-timing-cache
+          key: ${{ env.APK_CACHE_KEY }}
+          fail-on-cache-miss: true
+      - name: Verify and unpack exact engine seed
+        if: env.SCENARIO != 'cold'
+        shell: bash
+        env:
+          MATCHED_KEY: ${{ steps.seed.outputs.cache-matched-key }}
+          CACHE_HIT: ${{ steps.seed.outputs.cache-hit }}
+        run: |
+          set -euo pipefail
+          test "$CACHE_HIT" = true
+          test "$MATCHED_KEY" = "$APK_CACHE_KEY"
+          python3 - <<'PY'
+          import json, os, pathlib, time
+          p=pathlib.Path(os.environ['RUNNER_TEMP'])/'apk-timing/workflow-clock.json'
+          d=json.loads(p.read_text());d.update(cache_download_end_epoch=time.time(),cache_hit=True,cache_matched_key=os.environ['MATCHED_KEY'],cache_expected_key=os.environ['APK_CACHE_KEY']);p.write_text(json.dumps(d))
+          PY
+          python3 benchmark-source/ci/benchmark/timing_cache.py restore --engine "$ENGINE" --scenario "$SCENARIO"
+          rm -rf "$RUNNER_TEMP/apk-timing-cache"
+      - name: Install verified Flutter and Bazelisk
+        if: env.SCENARIO == 'cold'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$PUB_CACHE" "$BAZELISK_HOME"
+          curl --fail --location --retry 2 --output "$RUNNER_TEMP/flutter.tar.xz" https://storage.googleapis.com/flutter_infra_release/releases/stable/linux/flutter_linux_3.41.8-stable.tar.xz
+          echo "0c7e47fc39ef86290b41707d687bdca7f82b277267a6ef74717f8e88ac423de1  $RUNNER_TEMP/flutter.tar.xz" | sha256sum --check
+          tar -xJf "$RUNNER_TEMP/flutter.tar.xz" -C "$RUNNER_TEMP"
+          rm "$RUNNER_TEMP/flutter.tar.xz"
+          if [[ "$ENGINE" == bazel ]]; then
+            curl --fail --location --retry 2 --output "$RUNNER_TEMP/bazel" https://github.com/bazelbuild/bazelisk/releases/download/v1.29.0/bazelisk-linux-amd64
+            echo "5a408715e932c0250d28bd84555f12edbf70117de42f9181691c736eacc4a992  $RUNNER_TEMP/bazel" | sha256sum --check
+            chmod +x "$RUNNER_TEMP/bazel"
+          fi
+      - name: Verify tools and install pinned Android dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          export HOME="$RUNNER_TEMP/apk-timing/home"
+          test "$(git -C "$FLUTTER_ROOT" rev-parse HEAD)" = 02085feb3f5d8a8156e5e28512b9d99351d510c0
+          "$FLUTTER_ROOT/bin/flutter" --version
+          "$FLUTTER_ROOT/bin/flutter" precache --android
+          extension="$FLUTTER_ROOT/packages/flutter_tools/gradle/src/main/kotlin/FlutterExtension.kt"
+          ndk="$(python3 -c 'import pathlib,re,sys; print(re.search(r"val ndkVersion: String = \"([^\"]+)\"", pathlib.Path(sys.argv[1]).read_text()).group(1))' "$extension")"
+          api="$(python3 -c 'import pathlib,re,sys; print(re.search(r"val compileSdkVersion: Int = (\d+)", pathlib.Path(sys.argv[1]).read_text()).group(1))' "$extension")"
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-$api" "build-tools;$api.0.0" "ndk;$ndk"
+          { echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/$ndk"; echo "APK_TREE_BUILD_TOOLS=$ANDROID_HOME/build-tools/$api.0.0"; echo "APK_TREE_PLATFORM=$ANDROID_HOME/platforms/android-$api"; } >> "$GITHUB_ENV"
+          echo "$FLUTTER_ROOT/bin" >> "$GITHUB_PATH"
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+      - name: Install stock Maven Central mirror
+        if: env.ENGINE == 'stock'
+        shell: bash
+        run: |
+          install_dir="$RUNNER_TEMP/apk-timing/home/.gradle/init.d"
+          mkdir -p "$install_dir"
+          install -m 0644 benchmark-source/ci/benchmark/stock-maven-mirror.init.gradle "$install_dir/stock-maven-mirror.init.gradle"
+      - name: Build and validate current APK
+        id: build
+        shell: bash
+        env:
+          BAZEL_CACHE_HOST: ${{ secrets.BAZEL_CACHE_HOST }}
+          BAZEL_CACHE_PROJECT_ID: ${{ secrets.BAZEL_CACHE_PROJECT_ID }}
+          BAZEL_CACHE_TOKEN_RW: ${{ secrets.BAZEL_CACHE_TOKEN_RW }}
+          RULES_SHA: ${{ needs.prepare-lock.outputs.rules_sha }}
+        run: |
+          root="$RUNNER_TEMP/apk-timing"
+          trap 'rm -f "$root/remote-cache.bazelrc" "$root/logs/bep.json" "$root/logs/bazel-profile.json"' EXIT
+          python3 benchmark-source/ci/benchmark/timing.py run --engine "$ENGINE" --scenario "$SCENARIO"
+      - name: Pack bounded engine seed
+        if: always()
+        id: pack
+        shell: bash
+        run: python3 benchmark-source/ci/benchmark/timing_cache.py pack --engine "$ENGINE" --scenario "$SCENARIO"
+      - name: Publish exact engine seed
+        if: steps.pack.outputs.upload == 'true'
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830
+        with:
+          path: ${{ steps.pack.outputs.path }}
+          key: ${{ steps.pack.outputs.key }}
+      - name: Record and bound seed cache
+        if: always() && env.SCENARIO == 'cold' && env.APK_REPEAT == '0' && steps.pack.outputs.upload == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PUBLISHED_KEY: ${{ steps.pack.outputs.key }}
+        run: |
+          set -euo pipefail
+          gh api "repos/$GITHUB_REPOSITORY/actions/caches?per_page=100" > "$RUNNER_TEMP/apk-cache-after.json"
+          python3 - <<'PY'
+          import json,os,pathlib,time
+          listing=json.loads((pathlib.Path(os.environ['RUNNER_TEMP'])/'apk-cache-after.json').read_text())
+          if listing['total_count']>100: raise RuntimeError('Cache listing exceeds one page')
+          rows=[c for c in listing['actions_caches'] if c['key']==os.environ['PUBLISHED_KEY']]
+          if len(rows)!=1: raise RuntimeError('Exact engine seed cache missing or duplicated')
+          row=rows[0];cap=8 if os.environ['ENGINE']=='stock' else 3
+          if row['size_in_bytes']>cap*1024**3: raise RuntimeError('Engine seed cache exceeds cap')
+          total=sum(c['size_in_bytes'] for c in listing['actions_caches'])
+          if total>9*1024**3: raise RuntimeError('Cache total exceeds 9 GiB')
+          p=pathlib.Path(os.environ['RUNNER_TEMP'])/'apk-timing/workflow-clock.json';d=json.loads(p.read_text());d.update(cache_upload_end_epoch=time.time(),published_cache=row);p.write_text(json.dumps(d))
+          PY
+      - name: Shut down isolated Bazel server
+        if: always() && env.ENGINE == 'bazel'
+        shell: bash
+        run: |
+          root="$RUNNER_TEMP/apk-timing"
+          base="$root/bazel-output-base"
+          if [[ -x "$RUNNER_TEMP/bazel" && -d "$base/server" ]]; then
+            cd "$root/trees/bazel"
+            HOME="$root/home" timeout 30 "$RUNNER_TEMP/bazel" --nosystem_rc --nohome_rc --noworkspace_rc --output_base="$base" shutdown
+          fi
+      - name: Emit compact evidence without artifacts
+        if: always()
+        shell: bash
+        env: { APK_TIMING_JOB_STATUS: '${{ job.status }}' }
+        run: python3 benchmark-source/ci/benchmark/timing.py emit --engine "$ENGINE" --scenario "$SCENARIO"
+      - name: Require valid APK timing evidence
+        if: always()
+        shell: bash
+        env: { APK_TIMING_JOB_STATUS: '${{ job.status }}' }
+        run: python3 benchmark-source/ci/benchmark/timing.py verify --engine "$ENGINE" --scenario "$SCENARIO"
+
+  cold-bazel-0:
+    name: APK timing / bazel / cold / 0
+    needs: prepare-lock
+    if: github.repository == 'Sameri11/smooth-app'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env: { ENGINE: bazel, SCENARIO: cold, APK_REPEAT: '0', APK_BAZEL_JOBS: '128' }
+    outputs: { apk_proof: '${{ steps.build.outputs.apk_proof }}' }
+    steps: *workload
+
+  cold-stock-extra:
+    name: APK timing / stock / cold / ${{ matrix.repeat }}
+    needs: prepare-lock
+    if: github.repository == 'Sameri11/smooth-app' && (inputs.repeats || '3') != '1'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        repeat: ${{ fromJSON((inputs.repeats || '3') == '1' && '[]' || (inputs.repeats || '3') == '2' && '[1]' || (inputs.repeats || '3') == '3' && '[1,2]' || (inputs.repeats || '3') == '4' && '[1,2,3]' || '[1,2,3,4]') }}
+    env: { ENGINE: stock, SCENARIO: cold, APK_REPEAT: '${{ matrix.repeat }}' }
+    steps: *workload
+  cold-bazel-extra:
+    name: APK timing / bazel / cold / ${{ matrix.repeat }}
+    needs: prepare-lock
+    if: github.repository == 'Sameri11/smooth-app' && (inputs.repeats || '3') != '1'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        repeat: ${{ fromJSON((inputs.repeats || '3') == '1' && '[]' || (inputs.repeats || '3') == '2' && '[1]' || (inputs.repeats || '3') == '3' && '[1,2]' || (inputs.repeats || '3') == '4' && '[1,2,3]' || '[1,2,3,4]') }}
+    env: { ENGINE: bazel, SCENARIO: cold, APK_REPEAT: '${{ matrix.repeat }}', APK_BAZEL_JOBS: '128' }
+    steps: *workload
+
+  stock-readers:
+    name: APK timing / stock / ${{ matrix.scenario }} / ${{ matrix.repeat }}
+    needs: [prepare-lock, cold-stock-0]
+    if: always() && needs.cold-stock-0.result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        scenario: [warm]
+        repeat: ${{ fromJSON((inputs.repeats || '3') == '1' && '[0]' || (inputs.repeats || '3') == '2' && '[0,1]' || (inputs.repeats || '3') == '3' && '[0,1,2]' || (inputs.repeats || '3') == '4' && '[0,1,2,3]' || '[0,1,2,3,4]') }}
+    env: { ENGINE: stock, SCENARIO: '${{ matrix.scenario }}', APK_REPEAT: '${{ matrix.repeat }}' }
+    steps: *workload
+  bazel-readers:
+    name: APK timing / bazel / ${{ matrix.scenario }} / ${{ matrix.repeat }}
+    needs: [prepare-lock, cold-bazel-0]
+    if: always() && needs.cold-bazel-0.result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        scenario: [warm, lib]
+        repeat: ${{ fromJSON((inputs.repeats || '3') == '1' && '[0]' || (inputs.repeats || '3') == '2' && '[0,1]' || (inputs.repeats || '3') == '3' && '[0,1,2]' || (inputs.repeats || '3') == '4' && '[0,1,2,3]' || '[0,1,2,3,4]') }}
+    env: { ENGINE: bazel, SCENARIO: '${{ matrix.scenario }}', APK_REPEAT: '${{ matrix.repeat }}', APK_BAZEL_JOBS: '128', APK_SEED_PROOF: '${{ needs.cold-bazel-0.outputs.apk_proof }}' }
+    steps: *workload
+
+  report:
+    name: Analyze and preserve benchmark results
+    if: always()
+    needs: [prepare-lock, cold-stock-0, cold-bazel-0, cold-stock-extra, cold-bazel-extra, stock-readers, bazel-readers]
+    runs-on: ubuntu-24.04
+    permissions: { actions: write, contents: write }
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with: { ref: '${{ github.sha }}', persist-credentials: false }
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with: { python-version: '3.12' }
+      - name: Collect logs, analyze, retire seeds, and record result
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RULES_SHA: ${{ needs.prepare-lock.outputs.rules_sha }}
+          APP_REF: "${{ inputs.app_ref || '6e7408fda8e46bc97a0d8f2b33a801cf27c8dabe' }}"
+          REPEATS: "${{ inputs.repeats || '3' }}"
+        run: python3 ci/benchmark/report.py

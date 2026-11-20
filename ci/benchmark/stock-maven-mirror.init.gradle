@@ -1,0 +1,44 @@
+import org.gradle.api.artifacts.repositories.MavenArtifactRepository
+import java.net.URI
+
+final String mirrorName = 'stockGoogleMavenCentralMirror'
+final String mirrorUrl = 'https://maven-central.storage-download.googleapis.com/maven2'
+final Set<String> centralHosts = ['repo.maven.apache.org', 'repo1.maven.org'] as Set
+
+def rewriteCentral = { repository ->
+    if (!(repository instanceof MavenArtifactRepository)) return
+    URI uri = repository.url
+    if (centralHosts.contains(uri.host) && (uri.path == '/maven2' || uri.path.startsWith('/maven2/'))) {
+        String suffix = uri.path.substring('/maven2'.length())
+        repository.url = URI.create(mirrorUrl + suffix)
+    }
+}
+
+def watchCentral = { repositories ->
+    repositories.withType(MavenArtifactRepository).all { rewriteCentral(it) }
+    repositories.whenObjectAdded { rewriteCentral(it) }
+}
+
+def addMavenIfAbsent = { repositories, name, url ->
+    if (repositories.findByName(name) == null) {
+        repositories.maven {
+            delegate.name = name
+            delegate.url = URI.create(url)
+        }
+    }
+}
+
+gradle.beforeSettings { settings ->
+    def pluginRepositories = settings.pluginManagement.repositories
+    // Keep Google's repository before Central, replacing Central in place.
+    addMavenIfAbsent(pluginRepositories, 'stockGooglePluginFallback', 'https://dl.google.com/dl/android/maven2/')
+    addMavenIfAbsent(pluginRepositories, mirrorName, mirrorUrl)
+    addMavenIfAbsent(pluginRepositories, 'stockPluginPortalFallback', 'https://plugins.gradle.org/m2')
+    watchCentral(pluginRepositories)
+    watchCentral(settings.dependencyResolutionManagement.repositories)
+}
+
+gradle.beforeProject { project ->
+    watchCentral(project.buildscript.repositories)
+    watchCentral(project.repositories)
+}
