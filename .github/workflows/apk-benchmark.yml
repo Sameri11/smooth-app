@@ -2,7 +2,7 @@ name: Stock vs Bazel benchmark
 
 on:
   push:
-    branches: [prototype/host-critical-path]
+    branches: [prototype/host-swift-probe]
   workflow_dispatch:
     inputs:
       suite:
@@ -385,7 +385,7 @@ jobs:
 
   host-dependency-seed:
     name: Test dependency seed
-    if: github.repository == 'Sameri11/smooth-app' && (inputs.suite || 'test') != 'apk'
+    if: github.event_name != 'push' && github.repository == 'Sameri11/smooth-app' && inputs.suite != 'apk'
     needs: resolve-rules
     runs-on: ubuntu-24.04
     timeout-minutes: 30
@@ -420,7 +420,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        repeat: &host-repeats ${{ fromJSON((inputs.repeats || '1') == '1' && '[1]' || (inputs.repeats || '1') == '2' && '[1,2]' || (inputs.repeats || '1') == '3' && '[1,2,3]' || (inputs.repeats || '1') == '4' && '[1,2,3,4]' || '[1,2,3,4,5]') }}
+        repeat: ${{ fromJSON((inputs.repeats || '1') == '1' && '[1]' || (inputs.repeats || '1') == '2' && '[1,2]' || (inputs.repeats || '1') == '3' && '[1,2,3]' || (inputs.repeats || '1') == '4' && '[1,2,3,4]' || '[1,2,3,4,5]') }}
     env:
       ENGINE: stock
       SCENARIO: clean
@@ -441,11 +441,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        repeat: *host-repeats
+        repeat: [1, 2, 3]
     env:
       ENGINE: bazel
       SCENARIO: cold
       REPETITION: ${{ matrix.repeat }}
+      ARM: seed
       RULES_SHA: ${{ needs.resolve-rules.outputs.rules_sha }}
     steps: &host-bazel
       - *host-source
@@ -458,6 +459,19 @@ jobs:
           HOST_BAZEL_PROFILE: ${{ runner.temp }}/host-bazel-profile.raw.gz
         run: |
           set -euo pipefail
+          swift=$(command -v swiftc)
+          test "$swift" = /usr/local/bin/swiftc
+          if [[ "$ARM" == hide-swift ]]; then
+            hidden="$swift.host-benchmark-hidden"
+            test ! -e "$hidden" && test ! -L "$hidden"
+            sudo mv -- "$swift" "$hidden"
+            trap 'sudo mv -- "$hidden" "$swift"' EXIT
+            if command -v swiftc; then
+              echo "another swiftc is visible on PATH" >&2
+              exit 1
+            fi
+          fi
+          echo "HOST_PROBE_ARM $ARM"
           python3 ci/benchmark/host/run.py run
           python3 - <<'PY'
           import gzip
@@ -481,32 +495,33 @@ jobs:
           PY
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: host-profile-${{ env.SCENARIO }}-${{ env.REPETITION }}
+          name: host-profile-${{ env.ARM }}-${{ env.REPETITION }}
           path: ${{ runner.temp }}/host-bazel-profile.json.gz
           compression-level: 0
           retention-days: 7
           if-no-files-found: error
 
   host-bazel:
-    name: Test timing / bazel / ${{ matrix.scenario }} / ${{ matrix.repeat }}
+    name: Test warm / ${{ matrix.arm }} / ${{ matrix.repeat }}
     needs: [resolve-rules, host-bazel-seed]
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
-        repeat: *host-repeats
-        scenario: [warm, test, lib]
+        repeat: [1, 2, 3]
+        arm: [control, hide-swift]
     env:
       ENGINE: bazel
-      SCENARIO: ${{ matrix.scenario }}
+      SCENARIO: warm
+      ARM: ${{ matrix.arm }}
       REPETITION: ${{ matrix.repeat }}
       RULES_SHA: ${{ needs.resolve-rules.outputs.rules_sha }}
     steps: *host-bazel
 
   report:
     name: Analyze and preserve benchmark results
-    if: always()
+    if: always() && github.event_name != 'push'
     needs: [resolve-rules, prepare-lock, cold-stock-0, cold-bazel-0, cold-stock-extra, cold-bazel-extra, stock-readers, bazel-readers, host-dependency-seed, host-stock, host-bazel-seed, host-bazel]
     runs-on: ubuntu-24.04
     permissions: { actions: write, contents: write }
