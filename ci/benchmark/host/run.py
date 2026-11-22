@@ -363,10 +363,17 @@ def bazel_records(root, env, bazel, scenario, repetition):
     raw, execution = rt / "bep.json", rt / "execution.json"
     for p in (raw, execution):
         p.unlink(missing_ok=True)
+    profile = env.get("HOST_BAZEL_PROFILE")
+    profile_flags = [
+        "--profile=" + profile,
+        "--record_full_profiler_data",
+        "--experimental_profile_include_target_label",
+        "--experimental_profile_include_primary_output",
+    ] if profile else []
     args, mode, salt = bazel_argv(root, env, bazel, "test", scenario, repetition,
         "--lockfile_mode=update", "--keep_going", "--test_output=errors",
         "--build_event_json_file=" + str(raw), "--execution_log_json_file=" + str(execution),
-        "--noexecution_log_sort", *["//" + p + ":tests" for p in PACKAGES])
+        "--noexecution_log_sort", *profile_flags, *["//" + p + ":tests" for p in PACKAGES])
     start = time.monotonic()
     result = subprocess.run(args, cwd=root, env=env)
     elapsed = time.monotonic() - start
