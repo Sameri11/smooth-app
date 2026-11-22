@@ -266,8 +266,12 @@ def remote_identity(rep):
     if os.environ.get("REPETITION") != str(rep):
         raise probe.Stop("REPETITION must equal the --rep value %d" % rep)
     compiler = compiler_identity()
+    phase = os.environ.get("HOST_TIMING_PHASE")
+    if phase not in ("readiness", "timing"):
+        raise probe.Stop("HOST_TIMING_PHASE must be readiness or timing")
     return {"run_id": run_id, "attempt": attempt, "head": head, "repetition": rep,
-            "compiler": compiler, "salt": "%s/%s/%s/%d/%s" % (run_id, attempt, head, rep, compiler)}
+            "compiler": compiler, "phase": phase,
+            "salt": "%s/%s/%s/%s/%d/%s" % (run_id, attempt, head, phase, rep, compiler)}
 
 
 def scrubbing_text(salt):
@@ -580,14 +584,9 @@ def bazel_job(rt, env, recorder, manifest, data, scenario, expected, defaults, r
     if not (rt / "bazel").is_file():
         raise probe.Stop("Bazelisk is not installed at %s" % (rt / "bazel"))
     compiler = compiler_identity()
-    phase = os.environ.get("HOST_TIMING_PHASE", "")
-    if phase not in ("readiness", "timing"):
-        raise probe.Stop("HOST_TIMING_PHASE must be readiness or timing")
     digest = os.environ.get("BAZEL_MODULE_LOCK_SHA256", "")
-    if phase == "readiness" and digest:
-        raise probe.Stop("readiness must not set BAZEL_MODULE_LOCK_SHA256")
-    if phase == "timing" and not re.fullmatch(r"[0-9a-f]{64}", digest):
-        raise probe.Stop("timing requires a 64-hex BAZEL_MODULE_LOCK_SHA256")
+    if not re.fullmatch(r"[0-9a-f]{64}", digest):
+        raise probe.Stop("benchmark requires a 64-hex BAZEL_MODULE_LOCK_SHA256")
     lock = ROOT / "MODULE.bazel.lock"
     mode = "update" if scenario in ("cold", "lib") else "error"
     if mode == "error" and probe.digest(lock) != digest:
@@ -611,7 +610,7 @@ def bazel_job(rt, env, recorder, manifest, data, scenario, expected, defaults, r
     if lock.is_file():
         probe.copy_artifact(lock, OUT / "bazel" / "MODULE.bazel.lock")
     actual_lock = probe.digest(lock)
-    if phase == "timing" and actual_lock != digest:
+    if actual_lock != digest:
         raise probe.Stop("generated module lock differs from BAZEL_MODULE_LOCK_SHA256")
     if not raw.is_file():
         raise probe.Stop("bazel test wrote no build event stream")
@@ -632,10 +631,10 @@ def bazel_job(rt, env, recorder, manifest, data, scenario, expected, defaults, r
         bep["problems"].append("executed DartTestKernel actions must use the worker")
     if compiler == "worker" and scenario == "cold" and not any(not spawn["cache_hit"] for spawn in drivers):
         bep["problems"].append("cold worker invocation must execute TestKernelDriver")
-    if compiler == "frontend_server" and (worker_count or drivers):
-        bep["problems"].append("frontend_server must not involve the worker or its driver")
+    if compiler == "frontend_server" and (not kernels or worker_count or drivers):
+        bep["problems"].append("frontend_server must compile test kernels without the worker or driver")
     bep["verdict"] = "fail" if bep["problems"] else "pass"
-    lock_ok = actual_lock is not None and (phase == "readiness" or actual_lock == digest)
+    lock_ok = actual_lock == digest
     remote_summary = None
     if remote:
         remote_hits = sum(entry["cachedRemotely"] for entry in bep["per_label"].values())
@@ -767,8 +766,9 @@ def run_controls(engine, rep):
                     parsed = probe.parse_machine(out.read_text(), SMOOTH)
                     outcome = control_verdict(phase["exit_code"], parsed["cases"], names, required)
                 else:
-                    if probe.digest(ROOT / "MODULE.bazel.lock") != data["bazel_module_lock_sha256"]:
-                        raise probe.Stop("controls require the frozen module lock")
+                    cold_lock = result["gate"]["module_lock"]["after_sha256"]
+                    if not cold_lock or probe.digest(ROOT / "MODULE.bazel.lock") != cold_lock:
+                        raise probe.Stop("controls require the module lock from the passing cold run")
                     ensure_tool_package_config(rt, env, recorder, "control-tools-pub-get-" + control)
                     ensure_consumer_generated_inputs(rt, env, recorder, "control-smooth-pub-get-" + control)
                     phase = recorder.command("control-" + control, bazel_argv(

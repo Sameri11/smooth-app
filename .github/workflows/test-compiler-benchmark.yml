@@ -1,4 +1,4 @@
-name: Host test worker readiness
+name: Host test compiler comparison
 
 on:
   push:
@@ -15,19 +15,24 @@ env:
   CI: 'true'
   FLUTTER_SUPPRESS_ANALYTICS: 'true'
   ENGINE: bazel
+  BAZEL_MODULE_LOCK_SHA256: 6a8bc7560bf57be75ec8674a5616a7cec20ca75175c124406b49431c122165c1
 
 jobs:
   readiness:
-    name: Cold host unit tests with the worker
+    name: readiness / ${{ matrix.compiler }}
     if: github.repository == 'Sameri11/smooth-app'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        compiler: [worker, frontend_server]
     env:
       HOST_TIMING_PHASE: readiness
-      TEST_KERNEL_COMPILER: worker
+      TEST_KERNEL_COMPILER: ${{ matrix.compiler }}
       SCENARIO: cold
       REPETITION: '1'
-    steps:
+    steps: &workload
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
@@ -36,3 +41,37 @@ jobs:
           cache-host: ${{ secrets.BAZEL_CACHE_HOST }}
           cache-project: ${{ secrets.BAZEL_CACHE_PROJECT_ID }}
           cache-token: ${{ secrets.BAZEL_CACHE_TOKEN_RW }}
+
+  cold:
+    name: cold / ${{ matrix.compiler }} / ${{ matrix.repeat }}
+    needs: readiness
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        compiler: [worker, frontend_server]
+        repeat: [1, 2, 3]
+    env:
+      HOST_TIMING_PHASE: timing
+      TEST_KERNEL_COMPILER: ${{ matrix.compiler }}
+      SCENARIO: cold
+      REPETITION: ${{ matrix.repeat }}
+    steps: *workload
+
+  library_edit:
+    name: library edit / ${{ matrix.compiler }} / ${{ matrix.repeat }}
+    needs: cold
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        compiler: [worker, frontend_server]
+        repeat: [1, 2, 3]
+    env:
+      HOST_TIMING_PHASE: timing
+      TEST_KERNEL_COMPILER: ${{ matrix.compiler }}
+      SCENARIO: lib
+      REPETITION: ${{ matrix.repeat }}
+    steps: *workload
