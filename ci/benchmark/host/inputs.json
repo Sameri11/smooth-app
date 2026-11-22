@@ -12,7 +12,8 @@
   },
   "case_inventory": {
     "count": 246,
-    "sha256": "f8cfb28cbf2119287ac2a9d4499d6a8aff5e98a1a213cfdf48adcd767b61f597"
+    "sha256": "6474e0e20dcb121f263be7291604e97a724b05a0afe39e9bcfced835ed627c40",
+    "renamed_sha256": "88a4e945e49827f95182431b1adcb329e4a9e176bfffa3a17a8839b94dc38195"
   },
   "packages": [
     "packages/app_store/apple_app_store",

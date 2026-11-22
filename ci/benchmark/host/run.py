@@ -98,13 +98,23 @@ def clean_outputs(root):
         raise Stop("timed stock resolution must start without outputs: " + ", ".join(dirty))
 
 
+def stock_lock_snapshot(root):
+    locks = {package: digest(root / package / "pubspec.lock") for package in PACKAGES}
+    if any(value is None for value in locks.values()):
+        raise Stop("a frozen package pubspec.lock is missing")
+    return locks
+
+
 def stock_pub(root, env, flutter):
+    before = stock_lock_snapshot(root)
     elapsed = 0.0
     for package in PACKAGES:
         result, duration = command([str(flutter), "pub", "get", "--enforce-lockfile"], cwd=root / package, env=env)
         elapsed += duration
         if result.returncode:
             raise Stop(package + " pub get --enforce-lockfile failed")
+    if stock_lock_snapshot(root) != before:
+        raise Stop("stock pub get changed a frozen pubspec.lock")
     return elapsed
 
 
@@ -160,6 +170,15 @@ def expected_hash(records):
     normalized = [list(record) for record in sorted(records)]
     return sha(json.dumps(normalized, separators=(",", ":"), ensure_ascii=False).encode())
 
+def package_relative(classname, package):
+    marker = package + "/"
+    if classname.startswith(marker):
+        return classname[len(marker):]
+    index = classname.find("/" + marker)
+    if index < 0:
+        raise Stop(f"{classname!r} does not name {package}")
+    return classname[index + 1 + len(marker):]
+
 
 def stock_tests(root, env, flutter):
     all_records, elapsed = [], 0.0
@@ -177,12 +196,16 @@ def stock_tests(root, env, flutter):
     return all_records, elapsed
 
 
+def host_salt(run_id, attempt, head, repetition):
+    return f"host-test/{run_id}/{attempt}/{head}/{repetition}"
+
+
 def remote_policy(rt, scenario, repetition, *, controls=False):
     mode = "read" if controls or scenario != "cold" else "seed"
     run_id, attempt, head = (need_env("GITHUB_RUN_ID"), need_env("GITHUB_RUN_ATTEMPT"), need_env("GITHUB_SHA"))
     if not run_id.isdigit() or not attempt.isdigit() or not re.fullmatch(r"[0-9a-f]{40}", head):
         raise Stop("remote cache lineage needs numeric run/attempt and 40-hex GITHUB_SHA")
-    salt = f"{run_id}/{attempt}/{head}/{repetition}"
+    salt = host_salt(run_id, attempt, head, repetition)
     rc = rt / "remote-cache.bazelrc"
     host, project, token = (need_env(k) for k in ("BAZEL_CACHE_HOST", "BAZEL_CACHE_PROJECT_ID", "BAZEL_CACHE_TOKEN_RW"))
     if "://" in host or "/" in host:
@@ -214,17 +237,30 @@ def bazel_argv(root, env, bazel, command_name, scenario, repetition, *opts, cont
 def parse_bep(path):
     text = path.read_text()
     dec = json.JSONDecoder()
-    events = []
-    pos = 0
+    events, pos = [], 0
     while pos < len(text):
         if text[pos].isspace():
             pos += 1
             continue
         item, pos = dec.raw_decode(text, pos)
         events.append(item)
-    results = [e["testResult"] for e in events if "testResult" in e]
-    hits = sum(bool(r.get("executionInfo", {}).get("cachedRemotely")) for r in results)
-    return events, results, hits
+    results, summaries = {}, {}
+    for event in events:
+        result = event.get("testResult")
+        if result is not None:
+            label = event.get("id", {}).get("testResult", {}).get("label")
+            if not isinstance(label, str):
+                raise Stop("Bazel test result has no label")
+            results.setdefault(label, []).append(result)
+        summary = event.get("testSummary")
+        if summary is not None:
+            label = event.get("id", {}).get("testSummary", {}).get("label")
+            if not isinstance(label, str):
+                raise Stop("Bazel test summary has no label")
+            summaries.setdefault(label, []).append(summary)
+    hits = sum(bool(r.get("executionInfo", {}).get("cachedRemotely"))
+               for values in results.values() for r in values)
+    return events, results, summaries, hits
 
 
 def parse_execution_log(path):
@@ -337,35 +373,64 @@ def bazel_records(root, env, bazel, scenario, repetition):
     lock_sha = digest(root / "MODULE.bazel.lock")
     if not lock_sha or not raw.is_file():
         raise Stop("Bazel wrote no lockfile or build event stream")
-    events, results, hits = parse_bep(raw)
+    events, results, summaries, hits = parse_bep(raw)
+    expected_labels = {
+        "//" + package + ":" + path.relative_to(root / package).with_suffix("").as_posix()
+        for package in PACKAGES
+        for path in (root / package / "test").rglob("*_test.dart")
+    }
+    if set(results) != expected_labels or set(summaries) != expected_labels:
+        raise Stop("BEP test result/summary labels differ from the source test target inventory")
+    for label in expected_labels:
+        if len(results[label]) != 1 or results[label][0].get("status") != "PASSED":
+            raise Stop(label + " must have exactly one PASSED TestResult")
+        if len(summaries[label]) != 1 or summaries[label][0].get("overallStatus") != "PASSED":
+            raise Stop(label + " must have exactly one PASSED TestSummary")
+    if any(r.get("cachedLocally") for values in results.values() for r in values):
+        raise Stop("test results must not come from a local output-base cache")
     spawns = parse_execution_log(execution)
     kernels = [x for x in spawns if x.get("mnemonic") == "DartTestKernel" and not x.get("cacheHit", False)]
     workers = [x for x in kernels if "worker" in str(x.get("runner", "")).lower()]
-    misses = len(results) - hits
-    if scenario == "warm" and (hits != 23 or misses != 0 or kernels):
+    misses = len(expected_labels) - hits
+    if scenario == "warm" and (hits != len(expected_labels) or misses != 0 or kernels):
         raise Stop(f"warm cache gate failed: {hits} remote test hits, {misses} misses, {len(kernels)} kernel executions")
-    if scenario in ("test", "lib") and (not kernels or len(workers) != len(kernels) or
-                                         not any("string_extensions_test" in str(x.get("targetLabel", "")) for x in kernels)):
-        raise Stop("edited test target did not execute its test kernel using the default worker")
-    if mode == "seed" and (hits or not kernels):
-        raise Stop("cold seed must execute without remote cache hits")
+    if mode == "seed":
+        if (hits or misses != len(expected_labels) or len(kernels) != misses or
+                len(workers) != len(kernels) or any(r.get("cachedLocally") for rs in results.values() for r in rs)):
+            raise Stop("cold seed must execute every test through the default worker without cache hits")
+    edited_label = "//" + SMOOTH + ":test/utils/string_extensions_test"
+    if scenario in ("test", "lib"):
+        edited_results = results.get(edited_label, [])
+        edited_kernels = [x for x in kernels if x.get("targetLabel") == edited_label + "_kernel"]
+        if (len(edited_results) != 1 or edited_results[0].get("cachedLocally") or
+                edited_results[0].get("executionInfo", {}).get("cachedRemotely") or
+                not edited_kernels or any("worker" not in str(x.get("runner", "")).lower()
+                                          for x in edited_kernels)):
+            raise Stop("edited test target must be uncached and execute its test kernel with the default worker")
     records = []
+    records, xml_labels = [], set()
     for package in PACKAGES:
         directory = root / "bazel-testlogs" / package
         xmls = sorted(directory.rglob("test.xml")) if directory.exists() else []
         for xml in xmls:
+            rel_xml = xml.relative_to(directory).as_posix()
+            if not rel_xml.startswith("test/") or not rel_xml.endswith("/test.xml"):
+                raise Stop(f"unexpected JUnit path {rel_xml}")
+            target = "//" + package + ":" + rel_xml[:-len("/test.xml")]
+            xml_labels.add(target)
+            expected_file = target.split(":", 1)[1] + ".dart"
             try:
                 tree = ET.parse(xml).getroot()
             except ET.ParseError as error:
                 raise Stop(f"invalid JUnit file {xml}: {error}")
             for case in tree.iter("testcase"):
-                classname, name = case.get("classname", ""), case.get("name")
-                marker = package + "/"
-                if marker not in classname or name is None:
-                    raise Stop(f"malformed JUnit testcase in {xml}")
-                file = classname.split(marker, 1)[1]
+                name = case.get("name")
+                if name is None or package_relative(case.get("classname", ""), package) != expected_file:
+                    raise Stop(f"malformed or mismatched JUnit testcase in {xml}")
                 outcome = "fail" if case.find("failure") is not None else "error" if case.find("error") is not None else "skip" if case.find("skipped") is not None else "pass"
-                records.append((package, file, name, outcome))
+                records.append((package, expected_file, name, outcome))
+    if xml_labels != expected_labels:
+        raise Stop("JUnit file labels differ from the complete test target inventory")
     if result.returncode:
         raise Stop("Bazel test command failed")
     return records, elapsed, lock_sha, hits, misses, len(kernels), len(workers), result.returncode
@@ -415,10 +480,13 @@ def main(argv):
     env, flutter, bazel = environment(root, engine)
     rt = runner_temp()
     if argv == ["prepare-stock"]:
+        seed_locks = stock_lock_snapshot(root)
         for package in PACKAGES:
             proc, _ = command([str(flutter), "pub", "get", "--enforce-lockfile"], cwd=root / package, env=env)
             if proc.returncode:
                 raise Stop(package + " seed pub get failed")
+        if stock_lock_snapshot(root) != seed_locks:
+            raise Stop("stock seed pub get changed a frozen pubspec.lock")
         config = root / SMOOTH / ".dart_tool" / "package_config.json"
         seed = {"sdk_revision": INPUTS["flutter"]["revision"], "pub_cache_path": env["PUB_CACHE"],
                 "pub_cache_entries": sum(1 for p in Path(env["PUB_CACHE"]).rglob("*")),
@@ -472,7 +540,7 @@ def main(argv):
             raise Stop("scenario source edit was not restored byte-for-byte")
     observed_hash = expected_hash(records)
     observed = len(records)
-    allowed = INVENTORY["sha256"] if scenario != "test" else "b24a0026a7b7c24956533795a80ea909d1d426e1234b00e8873c20df4a8dddee"
+    allowed = INVENTORY["renamed_sha256"] if scenario == "test" else INVENTORY["sha256"]
     if observed != INVENTORY["count"] or observed_hash != allowed:
         raise Stop(f"case inventory mismatch: {observed} cases, digest {observed_hash}")
     validated_at = time.time()
@@ -481,7 +549,7 @@ def main(argv):
     run_id, attempt, head = (os.environ.get("GITHUB_RUN_ID", "local"),
                              os.environ.get("GITHUB_RUN_ATTEMPT", "1"),
                              os.environ.get("GITHUB_SHA", "local"))
-    salt = f"{run_id}/{attempt}/{head}/{repetition}" if engine == "bazel" else None
+    salt = host_salt(run_id, attempt, head, repetition) if engine == "bazel" else None
     seed_identity = {"run_id": run_id, "attempt": attempt, "workflow_sha": head,
                      "repetition": repetition, "salt": salt} if engine == "bazel" else None
     seed_sha = os.environ.get("HOST_DEPENDENCY_SEED_SHA256") if engine == "stock" else sha(

@@ -97,6 +97,8 @@ def main():
     if suite == "test":
         from host_report import main as host_main
         return host_main()
+    errors, rows = [], []
+    host_result = None
     host_summary_lines = None
     if suite == "both":
         from host_report import collect as collect_host, summary_lines as host_summary_lines

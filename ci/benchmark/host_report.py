@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Collect and validate stock/Bazel host unit-test benchmark evidence."""
 import datetime
+import hashlib
 import json
 import math
 import os
@@ -9,10 +10,10 @@ import subprocess
 import sys
 from pathlib import Path
 
-FIXTURE_SHA = "0e1484478b62b527d26a83a52d6898504443dbb6"
 HOST_INPUTS = json.loads((Path(__file__).parent / "host" / "inputs.json").read_text())
+FIXTURE_SHA = HOST_INPUTS["fixture_sha"]
 CASE_INVENTORY_SHA = HOST_INPUTS["case_inventory"]["sha256"]
-RENAMED_CASE_SHA = "b24a0026a7b7c24956533795a80ea909d1d426e1234b00e8873c20df4a8dddee"
+RENAMED_CASE_SHA = HOST_INPUTS["case_inventory"]["renamed_sha256"]
 REPO = os.environ["GITHUB_REPOSITORY"]
 RUN = os.environ["GITHUB_RUN_ID"]
 ATTEMPT = os.environ["GITHUB_RUN_ATTEMPT"]
@@ -87,7 +88,7 @@ def collect():
     actual = [name for name in by_name if name == "Test dependency seed" or name.startswith("Test timing /") or name.startswith("Test seed /")]
     if sorted(actual) != sorted(names):
         errors.append("host test job matrix differs from expected matrix")
-    table = {}
+    validation_state = {"lock_sha": None, "seeds": {}}
     for name in names:
         matches = by_name.get(name, [])
         row = {"name": name, "job_ids": [job.get("id") for job in matches]}
@@ -116,7 +117,7 @@ def collect():
                     row["restore"] = restore
                     validate_restore(restore)
                 proof = proof_from_log(log, "HOST_TEST_PROOF")
-                validate_run(name, proof)
+                candidate = validate_run(name, proof, validation_state)
                 started = datetime.datetime.fromisoformat(job["started_at"].replace("Z", "+00:00")).timestamp()
                 completed = datetime.datetime.fromisoformat(job["completed_at"].replace("Z", "+00:00")).timestamp()
                 validated = proof.get("validated_at_epoch")
@@ -129,6 +130,10 @@ def collect():
                     raise ValueError("command, validated-result, and full-job timing order is invalid")
                 row["validated_result_seconds"] = result_seconds
                 row["proof"] = proof
+                if candidate:
+                    validation_state["lock_sha"] = candidate["lock_sha"]
+                    if candidate.get("seed"):
+                        validation_state["seeds"][candidate["repetition"]] = candidate["seed"]
                 table[name] = row
         except Exception as exc:
             row["evidence_error"] = str(exc)
@@ -267,7 +272,7 @@ def validate_restore(proof):
         raise ValueError("dependency restore time invalid")
 
 
-def validate_run(name, proof):
+def validate_run(name, proof, validation_state):
     _, engine, scenario, rep = name.split(" / ")
     repetition = int(rep)
     expected_scenario = "clean" if engine == "stock" else scenario
@@ -291,16 +296,16 @@ def validate_run(name, proof):
     elif not re.fullmatch(r"[0-9a-f]{64}", lock.get("sha256", "")) or lock.get("mode") != "update":
         raise ValueError("Bazel generated lock proof invalid")
     if engine == "bazel":
-        prior = getattr(validate_run, "lock_sha", None)
+        prior = validation_state["lock_sha"]
         if prior is not None and prior != lock["sha256"]:
             raise ValueError("Bazel lock digest differs across rows")
-        validate_run.lock_sha = lock["sha256"]
     lineage = proof.get("lineage", {})
     if (str(lineage.get("run_id")), str(lineage.get("attempt")), lineage.get("workflow_sha")) != (RUN, ATTEMPT, HEAD):
         raise ValueError("run lineage mismatch")
     remote_salt = lineage.get("salt")
-    if engine == "bazel" and (not isinstance(remote_salt, str) or not remote_salt):
-        raise ValueError("remote cache salt missing")
+    expected_salt = f"host-test/{RUN}/{ATTEMPT}/{HEAD}/{repetition}"
+    if engine == "bazel" and remote_salt != expected_salt:
+        raise ValueError("remote cache salt mismatch")
     if engine == "stock" and remote_salt is not None:
         raise ValueError("stock remote salt must be null")
     driver = proof.get("driver", {})
@@ -313,32 +318,38 @@ def validate_run(name, proof):
     if not re.fullmatch(r"[0-9a-f]{64}", cache.get("seed_sha256", "")):
         raise ValueError("cache seed digest missing")
     if engine == "stock":
-        if (cache.get("mode"), cache.get("read_only")) != ("read", True):
-            raise ValueError("stock dependency seed must be restored read-only")
-        if cache.get("seed_kind") not in (None, "stock-dependency"):
-            raise ValueError("stock dependency seed kind mismatch")
+        if (cache.get("mode"), cache.get("read_only"), cache.get("seed_kind"), cache.get("seed_identity")) != (
+                "read", True, "stock-dependency", None):
+            raise ValueError("stock dependency seed lineage/read-only proof invalid")
     else:
         expected_mode = "seed" if scenario == "cold" else "read"
         expected_read_only = scenario != "cold"
         if (cache.get("mode"), cache.get("read_only")) != (expected_mode, expected_read_only):
             raise ValueError("Bazel cache seed/read-only mode mismatch")
+        if cache.get("seed_kind") != "bazel-test":
+            raise ValueError("Bazel test seed kind mismatch")
         seed_identity = cache.get("seed_identity")
-        if (not isinstance(seed_identity, dict)
-                or str(seed_identity.get("run_id")) != RUN
-                or str(seed_identity.get("attempt")) != ATTEMPT
-                or seed_identity.get("workflow_sha") != HEAD
-                or seed_identity.get("repetition") != repetition
-                or seed_identity.get("salt") != remote_salt):
+        expected_identity = {
+            "run_id": RUN, "attempt": ATTEMPT, "workflow_sha": HEAD,
+            "repetition": repetition, "salt": expected_salt,
+        }
+        if seed_identity != expected_identity:
             raise ValueError("Bazel seed lineage identity mismatch")
-        seeds = getattr(validate_run, "seed_sha", {})
-        salts = getattr(validate_run, "seed_salt", {})
-        if repetition in seeds and (seeds[repetition] != cache["seed_sha256"] or salts[repetition] != remote_salt):
-            raise ValueError("Bazel read row does not match its cold seed lineage")
+        expected_seed_sha = hashlib.sha256(json.dumps(
+            {"identity": expected_identity, "fixture_sha": FIXTURE_SHA,
+             "rules_sha": rules_sha, "lock_sha": lock["sha256"]},
+            sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+        if cache.get("seed_sha256") != expected_seed_sha:
+            raise ValueError("Bazel seed identity digest mismatch")
+        prior_seed = validation_state["seeds"].get(repetition)
         if scenario == "cold":
-            seeds[repetition] = cache["seed_sha256"]
-            salts[repetition] = remote_salt
-        validate_run.seed_sha = seeds
-        validate_run.seed_salt = salts
+            if prior_seed is not None:
+                raise ValueError("duplicate Bazel cold seed for repetition")
+        elif prior_seed is None:
+            raise ValueError("Bazel reader has no preceding valid cold seed")
+        elif (prior_seed["sha256"], prior_seed["salt"], prior_seed["lock_sha"]) != (
+                cache["seed_sha256"], remote_salt, lock["sha256"]):
+            raise ValueError("Bazel reader does not match its validated cold seed")
     hits, misses = cache.get("test_result_hits"), cache.get("test_result_misses")
     if any(isinstance(value, bool) or not isinstance(value, int) or value < 0 for value in (hits, misses)):
         raise ValueError("BEP test-result hit/miss counts invalid")
@@ -380,6 +391,16 @@ def validate_run(name, proof):
                 raise ValueError("Bazel controls did not preserve the timed lock under error mode")
     elif controls.get("status") != "not-run":
         raise ValueError("controls must run only on repeat one cold/clean")
+
+    candidate = None
+    if engine == "bazel":
+        candidate = {"lock_sha": lock["sha256"]}
+        if scenario == "cold":
+            candidate.update(repetition=repetition, seed={
+                "sha256": cache["seed_sha256"], "salt": remote_salt,
+                "lock_sha": lock["sha256"],
+            })
+    return candidate
 
 def summary_lines(result):
     seed_setup = result.get("seed_setup") or {}

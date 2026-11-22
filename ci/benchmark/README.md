@@ -95,3 +95,5 @@ The report separates test command time, time from provider job start to a valida
 ## Running and reading results
 
 On `develop`, use **Actions → Stock vs Bazel benchmark → Run workflow**. Choose `suite` (`apk`, `test`, or `both`; default `both`), `rules_ref` (default `main`), `app_ref` (APK only; default `6e7408fda8e46bc97a0d8f2b33a801cf27c8dabe`), and `repeats` (1–5; default 3). The first job resolves `rules_ref` to a single commit. The summary reports each requested suite's validity, verdicts, row timings, and seed costs. APK reports also retain hashes and the lock-refresh evidence. The complete record is committed as `results/<run-id>-<attempt>.json` on `benchmark-results`. Runs with fewer than three repeats report times but no speed verdict.
+
+Dispatch a new run to repeat a comparison. A partial rerun mixes attempts, but dependency artifacts and remote seeds are attempt-specific; the report will reject incomplete or mixed evidence.
