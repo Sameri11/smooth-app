@@ -2,7 +2,7 @@ name: Stock vs Bazel benchmark
 
 on:
   push:
-    branches: [prototype/host-swift-probe]
+    branches: [prototype/host-download-policy]
   workflow_dispatch:
     inputs:
       suite:
@@ -461,7 +461,7 @@ jobs:
           set -euo pipefail
           swift=$(command -v swiftc)
           test "$swift" = /usr/local/bin/swiftc
-          if [[ "$ARM" == hide-swift ]]; then
+          if [[ "$ARM" != seed ]]; then
             hidden="$swift.host-benchmark-hidden"
             test ! -e "$hidden" && test ! -L "$hidden"
             sudo mv -- "$swift" "$hidden"
@@ -472,7 +472,12 @@ jobs:
             fi
           fi
           echo "HOST_PROBE_ARM $ARM"
-          python3 ci/benchmark/host/run.py run
+          result=0
+          python3 ci/benchmark/host/run.py run || result=$?
+          if [[ ! -s "$HOST_BAZEL_PROFILE" ]]; then
+            echo "Bazel did not write a trace" >&2
+            exit 1
+          fi
           python3 - <<'PY'
           import gzip
           import json
@@ -493,13 +498,15 @@ jobs:
           (raw.parent / "host-bazel-profile.json.gz").write_bytes(gzip.compress(trace.encode()))
           raw.unlink()
           PY
+          exit "$result"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: '!cancelled()'
         with:
           name: host-profile-${{ env.ARM }}-${{ env.REPETITION }}
           path: ${{ runner.temp }}/host-bazel-profile.json.gz
           compression-level: 0
           retention-days: 7
-          if-no-files-found: error
+          if-no-files-found: warn
 
   host-bazel:
     name: Test warm / ${{ matrix.arm }} / ${{ matrix.repeat }}
@@ -510,7 +517,7 @@ jobs:
       fail-fast: false
       matrix:
         repeat: [1, 2, 3]
-        arm: [control, hide-swift]
+        arm: [all, toplevel]
     env:
       ENGINE: bazel
       SCENARIO: warm

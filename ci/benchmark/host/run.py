@@ -226,9 +226,10 @@ def bazel_argv(root, env, bazel, command_name, scenario, repetition, *opts, cont
     cache = rt / "cache-state"
     startup = [str(bazel), "--output_base=" + str(output_base), "--nosystem_rc", "--nohome_rc",
                "--bazelrc=" + str(rc)]
+    download = "toplevel" if scenario == "warm" and env.get("ARM") == "toplevel" else "all"
     build = ["--disk_cache=", "--remote_accept_cached=" + ("false" if mode == "seed" else "true"),
              "--remote_upload_local_results=" + ("true" if mode == "seed" else "false"),
-             "--remote_cache_async=false", "--remote_download_outputs=all", "--announce_rc=false",
+             "--remote_cache_async=false", "--remote_download_outputs=" + download, "--announce_rc=false",
              "--experimental_remote_scrubbing_config=" + str(scrub),
              "--repository_cache=" + str(cache / "repository"), "--repo_env=FLUTTER_ROOT=" + env["FLUTTER_ROOT"]]
     return [*startup, command_name, *build, *opts], mode, salt
