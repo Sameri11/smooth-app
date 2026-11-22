@@ -1,6 +1,8 @@
 name: Stock vs Bazel benchmark
 
 on:
+  push:
+    branches: [prototype/shared-sdk-host-timing]
   workflow_dispatch:
     inputs:
       suite:
@@ -49,7 +51,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: Sameri11/rules_flutter
-          ref: ${{ inputs.rules_ref || 'main' }}
+          ref: ${{ inputs.rules_ref || '306f3f741193440c9f56a8de709abc04b9e2df09' }}
           path: rules
           persist-credentials: false
       - id: resolve
@@ -59,7 +61,7 @@ jobs:
   prepare-lock:
     name: Prepare shared Bazel module lock
     needs: resolve-rules
-    if: github.repository == 'Sameri11/smooth-app' && (inputs.suite || 'both') != 'test'
+    if: github.repository == 'Sameri11/smooth-app' && (inputs.suite || 'test') != 'test'
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     outputs:
@@ -383,7 +385,7 @@ jobs:
 
   host-dependency-seed:
     name: Test dependency seed
-    if: github.repository == 'Sameri11/smooth-app' && (inputs.suite || 'both') != 'apk'
+    if: github.repository == 'Sameri11/smooth-app' && (inputs.suite || 'test') != 'apk'
     needs: resolve-rules
     runs-on: ubuntu-24.04
     timeout-minutes: 30
@@ -432,7 +434,7 @@ jobs:
 
   host-bazel-seed:
     name: Test seed / bazel / cold / ${{ matrix.repeat }}
-    if: github.repository == 'Sameri11/smooth-app' && (inputs.suite || 'both') != 'apk'
+    if: github.repository == 'Sameri11/smooth-app' && (inputs.suite || 'test') != 'apk'
     needs: resolve-rules
     runs-on: ubuntu-24.04
     timeout-minutes: 30
@@ -487,7 +489,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           RULES_SHA: ${{ needs.resolve-rules.outputs.rules_sha }}
-          BENCHMARK_SUITE: ${{ inputs.suite || 'both' }}
+          BENCHMARK_SUITE: ${{ inputs.suite || 'test' }}
           APP_REF: "${{ inputs.app_ref || '6e7408fda8e46bc97a0d8f2b33a801cf27c8dabe' }}"
           REPEATS: "${{ inputs.repeats || '3' }}"
         run: python3 ci/benchmark/report.py

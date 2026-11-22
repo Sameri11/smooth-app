@@ -1,5 +1,5 @@
 name: Prepare host test benchmark tools
-description: Restore the exact stock dependency seed or provision a fresh Flutter SDK and Bazelisk.
+description: Provision the pinned Flutter SDK and either restore stock pub dependencies or install Bazelisk.
 runs:
   using: composite
   steps:
@@ -38,16 +38,22 @@ runs:
         sha=$(jq -er .payload.sha256 "$RUNNER_TEMP/host-dependency-seed/metadata.json")
         echo "HOST_DEPENDENCY_SEED_SHA256=$sha" >> "$GITHUB_ENV"
     - name: Install checksum-verified Flutter
-      if: env.ENGINE == 'bazel' || env.SCENARIO == 'dependencies'
       shell: bash
       run: |
         set -euo pipefail
         read -r version sha < <(jq -er '.flutter | "\(.version) \(.archive_sha256)"' ci/benchmark/host/inputs.json)
         archive="$RUNNER_TEMP/host-flutter.tar.xz"
+        start=$(date +%s.%N)
         curl --fail --location --retry 2 --output "$archive" \
           "https://storage.googleapis.com/flutter_infra_release/releases/stable/linux/flutter_linux_${version}-stable.tar.xz"
+        downloaded=$(date +%s.%N)
         echo "$sha  $archive" | sha256sum --check
         tar -xJf "$archive" -C "$RUNNER_TEMP"
+        unpacked=$(date +%s.%N)
+        jq -cn --argjson start "$start" --argjson downloaded "$downloaded" --argjson unpacked "$unpacked" \
+          --arg sha "$sha" --argjson bytes "$(stat -c %s "$archive")" \
+          '{archive_sha256:$sha, bytes:$bytes, download_seconds:($downloaded-$start), verify_extract_seconds:($unpacked-$downloaded)}' \
+          | sed 's/^/HOST_SDK_PROVISION /'
         rm "$archive"
     - name: Verify installed Flutter
       shell: bash

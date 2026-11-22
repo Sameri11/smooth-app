@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Pack and restore this run's bounded Flutter/pub dependency seed."""
+"""Pack and restore this run's bounded pub dependency seed."""
 
 from __future__ import annotations
 
@@ -22,16 +22,15 @@ def fail(message: str) -> None:
     raise RuntimeError(message)
 
 
-def runner_paths() -> tuple[pathlib.Path, pathlib.Path, pathlib.Path]:
+def runner_paths() -> tuple[pathlib.Path, pathlib.Path]:
     temp = pathlib.Path(os.environ["RUNNER_TEMP"])
     if not temp.is_absolute() or temp.resolve() != temp:
         fail("RUNNER_TEMP must be an absolute, canonical path")
-    sdk = temp / "flutter"
     pub = temp / "cache-state" / "pub"
     seed = temp / "host-dependency-seed"
-    if any(path.resolve(strict=False) != path for path in (sdk, pub, seed)):
+    if any(path.resolve(strict=False) != path for path in (pub, seed)):
         fail("seed paths must not traverse symlinks")
-    return sdk, pub, seed
+    return pub, seed
 
 
 def identity() -> dict[str, str]:
@@ -79,10 +78,9 @@ def check_directory(path: pathlib.Path, name: str) -> None:
         fail(f"expected a real directory for {name}: {path}")
 
 
-def generated_package_outputs(sdk: pathlib.Path, pub: pathlib.Path) -> list[str]:
-    package_roots = list((sdk / "packages").glob("*"))
-    for pattern in ("hosted/*/*", "git/cache/*", "global_packages/*"):
-        package_roots.extend(pub.glob(pattern))
+def generated_package_outputs(pub: pathlib.Path) -> list[str]:
+    package_roots = [root for pattern in ("hosted/*/*", "git/cache/*", "global_packages/*")
+                     for root in pub.glob(pattern)]
     outputs = []
     for package in package_roots:
         if not package.is_dir() or package.is_symlink():
@@ -90,15 +88,14 @@ def generated_package_outputs(sdk: pathlib.Path, pub: pathlib.Path) -> list[str]
         for name in (".dart_tool", "build"):
             output = package / name
             if output.exists() or output.is_symlink():
-                outputs.append(output.relative_to(sdk.parent).as_posix())
+                outputs.append(output.relative_to(pub.parent.parent).as_posix())
     return outputs
 
 
 def pack() -> None:
     require_tools()
     started = time.monotonic()
-    sdk, pub, seed = runner_paths()
-    check_directory(sdk, "Flutter SDK")
+    pub, seed = runner_paths()
     check_directory(pub, "pub cache")
     seed.mkdir(mode=0o700, parents=True, exist_ok=True)
     if seed.is_symlink() or any(seed.iterdir()):
@@ -109,11 +106,9 @@ def pack() -> None:
         "--no-wildcards",
     ]
     command.extend(
-        "--exclude=" + output for output in generated_package_outputs(sdk, pub)
+        "--exclude=" + output for output in generated_package_outputs(pub)
     )
-    command.extend(
-        ["-C", str(sdk.parent), "-cf", "-", "flutter", "cache-state/pub"]
-    )
+    command.extend(["-C", str(pub.parent.parent), "-cf", "-", "cache-state/pub"])
     tar = subprocess.Popen(command, stdout=subprocess.PIPE)
     assert tar.stdout is not None
     compressor = subprocess.Popen(
@@ -158,7 +153,7 @@ def pack() -> None:
 def restore() -> None:
     require_tools()
     started = time.monotonic()
-    sdk, pub, seed = runner_paths()
+    pub, seed = runner_paths()
     if seed.is_symlink() or not seed.is_dir():
         fail("dependency seed directory is missing or unsafe")
     metadata_path = seed / "metadata.json"
@@ -176,28 +171,22 @@ def restore() -> None:
         fail("dependency seed payload size does not match metadata or exceeds 3 GiB")
     if sha256_file(archive) != payload.get("sha256"):
         fail("dependency seed SHA256 mismatch")
-    if sdk.exists() or pub.exists():
-        fail("restore destinations already exist; refusing to overwrite runner state")
-    sdk.parent.mkdir(parents=True, exist_ok=True)
+    if pub.exists():
+        fail("restore destination already exists; refusing to overwrite runner state")
     stage = pathlib.Path(tempfile.mkdtemp(prefix="host-seed-", dir=seed))
     try:
         with subprocess.Popen(["zstd", "-q", "-d", "-c", str(archive)], stdout=subprocess.PIPE) as decoder:
             assert decoder.stdout is not None
             with tarfile.open(fileobj=decoder.stdout, mode="r|") as bundle:
                 for member in bundle:
-                    if member.name not in ("flutter", "cache-state", "cache-state/pub") and not (
-                        member.name.startswith("flutter/") or member.name.startswith("cache-state/pub/")
-                    ):
+                    if member.name != "cache-state/pub" and not member.name.startswith("cache-state/pub/"):
                         fail(f"unexpected path in seed archive: {member.name!r}")
                     bundle.extract(member, path=stage, filter="data")
             if decoder.wait():
                 fail("zstd failed while decoding dependency seed")
-        staged_sdk = stage / "flutter"
         staged_pub = stage / "cache-state" / "pub"
-        check_directory(staged_sdk, "restored Flutter SDK")
         check_directory(staged_pub, "restored pub cache")
         pub.parent.mkdir(parents=True, exist_ok=True)
-        os.replace(staged_sdk, sdk)
         os.replace(staged_pub, pub)
     finally:
         shutil.rmtree(stage, ignore_errors=True)
