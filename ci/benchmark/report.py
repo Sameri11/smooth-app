@@ -16,9 +16,9 @@ REPO = os.environ["GITHUB_REPOSITORY"]
 RUN = os.environ["GITHUB_RUN_ID"]
 ATTEMPT = int(os.environ["GITHUB_RUN_ATTEMPT"])
 WORKFLOW_SHA = os.environ["GITHUB_SHA"]
-RULES_SHA = os.environ["RULES_SHA"]
-APP_REF = os.environ["APP_REF"]
-REPEATS = int(os.environ["REPEATS"])
+RULES_SHA = os.environ.get("RULES_SHA", "")
+APP_REF = os.environ.get("APP_REF", "")
+REPEATS = int(os.environ.get("REPEATS", "0"))
 TOKEN = os.environ["GH_TOKEN"]
 ENGINES = ("stock", "bazel")
 SCENARIOS = {"stock": ("cold", "warm"), "bazel": ("cold", "warm", "lib")}
@@ -64,12 +64,47 @@ def median(values):
     return (values[(len(values) - 1) // 2] + values[len(values) // 2]) / 2
 
 
+def persist_result(output, subject):
+    """Write one benchmark record to the existing results branch."""
+    branch = "benchmark-results"
+    with tempfile.TemporaryDirectory(prefix="benchmark-results-") as directory:
+        path = Path(directory)
+        subprocess.run(["git", "init", "-q", "-b", branch], cwd=path, check=True)
+        subprocess.run(["git", "config", "user.name", "github-actions[bot]"], cwd=path, check=True)
+        subprocess.run(["git", "config", "user.email", "41898282+github-actions[bot]@users.noreply.github.com"], cwd=path, check=True)
+        remote = gh("api", f"repos/{REPO}/git/ref/heads/{branch}", check=False)
+        if remote.returncode == 0:
+            subprocess.run(["git", "remote", "add", "origin", f"https://github.com/{REPO}.git"], cwd=path, check=True)
+            subprocess.run(["git", "fetch", "--depth=1", "origin", branch], cwd=path, check=True)
+            subprocess.run(["git", "checkout", "-B", branch, "FETCH_HEAD"], cwd=path, check=True)
+        target = path / "results" / f"{RUN}-{ATTEMPT}.json"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(output)
+        subprocess.run(["git", "add", str(target.relative_to(path))], cwd=path, check=True)
+        subprocess.run(["git", "commit", "-m", f"{subject} {RUN}-{ATTEMPT}"], cwd=path, check=True)
+        push_env = {**os.environ, "GIT_ASKPASS": "echo", "GIT_TERMINAL_PROMPT": "0"}
+        subprocess.run(["git", "-c", f"http.https://github.com/.extraheader=AUTHORIZATION: basic {base64.b64encode(('x-access-token:'+TOKEN).encode()).decode()}",
+                        "push", "https://github.com/" + REPO + ".git", branch], cwd=path, env=push_env, check=True)
+
 def finite(value):
     return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
 
 
 def main():
-    errors, rows = [], []
+    suite = os.environ.get("BENCHMARK_SUITE", "apk")
+    if suite not in ("apk", "test", "both"):
+        raise ValueError("BENCHMARK_SUITE must be apk, test, or both")
+    if suite == "test":
+        from host_report import main as host_main
+        return host_main()
+    host_summary_lines = None
+    if suite == "both":
+        from host_report import collect as collect_host, summary_lines as host_summary_lines
+        try:
+            host_result = collect_host()
+        except Exception as exc:
+            host_result = {"valid": False, "issues": [f"host report collection failed: {exc}"]}
+            host_summary_lines = None
     try:
         jobs_doc = json.loads(gh(
             "api", f"repos/{REPO}/actions/runs/{RUN}/attempts/{ATTEMPT}/jobs?per_page=100").stdout)
@@ -291,6 +326,11 @@ def main():
         gradle = next((root for root in roots if root.get("name") == "gradle-dependency-cache"), {})
         seed_proofs.append({"engine": engine, "combined_bytes": pack.get("combined_bytes"),
                             "gradle_top_level_directories": gradle.get("top_level_directories", [])})
+    apk_valid = valid
+    if suite == "both":
+        if host_result is None:
+            host_result = {"valid": False, "issues": ["host report unavailable"]}
+        valid = apk_valid and host_result["valid"]
     result = {"run_id": RUN, "run_attempt": ATTEMPT, "workflow_commit": WORKFLOW_SHA,
               "rules_commit": RULES_SHA, "app_ref": APP_REF,
               "app_commit": app_commits[0] if len(app_commits) == 1 else None,
@@ -300,12 +340,18 @@ def main():
                                        "memory_bytes": (r.get("runner") or {}).get("memory_bytes")}
                                       for r in rows],
               "seed_cache_proofs": seed_proofs, "comparisons": comparisons, "cost": costs, "rows": rows}
+    if suite == "both":
+        result["suite"] = suite
+        result["apk_valid"] = apk_valid
+        result["host_tests"] = host_result
     output = json.dumps(result, indent=2, sort_keys=True) + "\n"
     outpath = Path(tempfile.gettempdir()) / "benchmark.json"
     outpath.write_text(output)
     summary = ["# Stock vs Bazel debug APK benchmark", "", f"Valid: **{str(valid).lower()}**",
                f"Workflow commit: `{WORKFLOW_SHA}`  ", f"Rules commit: `{RULES_SHA}`  ",
                f"App commit: `{result['app_commit'] or APP_REF}`", "", "## Seed sizes", ""]
+    if suite == "both":
+        summary += [f"APK valid: **{str(apk_valid).lower()}**"]
     for seed in seed_proofs:
         summary.append(f"- {seed['engine']}: {seed['combined_bytes'] if seed['combined_bytes'] is not None else 'missing'} bytes")
         if seed["engine"] == "stock":
@@ -347,35 +393,17 @@ def main():
     summary += ["", "## APK hashes", ""]
     for row in rows:
         summary.append(f"- {row['name']}: `{(row.get('artifact') or {}).get('sha256', 'missing')}`")
+    if suite == "both":
+        if host_summary_lines is None:
+            summary += ["", "# Host unit-test benchmark", "", "Valid: **false**",
+                        "", "## Validity issues", "",
+                        *[f"- {issue}" for issue in host_result.get("issues", ["host summary unavailable"])]]
+        else:
+            summary += [""] + host_summary_lines(host_result)
     with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as stream:
         stream.write("\n".join(summary) + "\n")
-
-
-    # Preserve benchmark.json on a dedicated orphan/history branch.
-    branch = "benchmark-results"
-    with tempfile.TemporaryDirectory(prefix="benchmark-results-") as directory:
-        path = Path(directory)
-        subprocess.run(["git", "init", "-q", "-b", branch], cwd=path, check=True)
-        subprocess.run(["git", "config", "user.name", "github-actions[bot]"], cwd=path, check=True)
-        subprocess.run(["git", "config", "user.email", "41898282+github-actions[bot]@users.noreply.github.com"], cwd=path, check=True)
-        remote = gh("api", f"repos/{REPO}/git/ref/heads/{branch}", check=False)
-        if remote.returncode == 0:
-            subprocess.run(["git", "remote", "add", "origin", f"https://github.com/{REPO}.git"], cwd=path, check=True)
-            subprocess.run(["git", "fetch", "--depth=1", "origin", branch], cwd=path, check=True)
-            subprocess.run(["git", "checkout", "-B", branch, "FETCH_HEAD"], cwd=path, check=True)
-        target = path / "results" / f"{RUN}-{ATTEMPT}.json"
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(output)
-        subprocess.run(["git", "add", str(target.relative_to(path))], cwd=path, check=True)
-        subprocess.run(["git", "commit", "-m", f"Record APK benchmark {RUN}-{ATTEMPT}"], cwd=path, check=True)
-        push_env = {**os.environ, "GIT_ASKPASS": "echo", "GIT_TERMINAL_PROMPT": "0"}
-        # gh auth token is supplied through an ephemeral credential helper.
-        subprocess.run(["git", "-c", f"http.https://github.com/.extraheader=AUTHORIZATION: basic {base64.b64encode(('x-access-token:'+TOKEN).encode()).decode()}",
-                        "push", "https://github.com/" + REPO + ".git", branch], cwd=path, env=push_env, check=True)
-    print(output)
+    persist_result(output, "Record APK benchmark")
     return 0 if valid else 1
-
-
 if __name__ == "__main__":
     try:
         raise SystemExit(main())

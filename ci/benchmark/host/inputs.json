@@ -1,0 +1,27 @@
+{
+  "schema": 1,
+  "fixture_sha": "0e1484478b62b527d26a83a52d6898504443dbb6",
+  "flutter": {
+    "version": "3.47.3",
+    "revision": "e8113bf45620cbeb8aff64947ee4c93e16adb4cf",
+    "archive_sha256": "988665565cad9091db1baa54bf6d3868bb40e29719592f3c3a164deefd4208e1"
+  },
+  "bazelisk": {
+    "version": "1.29.0",
+    "archive_sha256": "5a408715e932c0250d28bd84555f12edbf70117de42f9181691c736eacc4a992"
+  },
+  "case_inventory": {
+    "count": 246,
+    "sha256": "f8cfb28cbf2119287ac2a9d4499d6a8aff5e98a1a213cfdf48adcd767b61f597"
+  },
+  "packages": [
+    "packages/app_store/apple_app_store",
+    "packages/app_store/google_play",
+    "packages/app_store/shared",
+    "packages/app_store/uri_store",
+    "packages/scanner/ml_kit",
+    "packages/scanner/shared",
+    "packages/scanner/zxing",
+    "packages/smooth_app"
+  ]
+}

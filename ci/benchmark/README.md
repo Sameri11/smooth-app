@@ -1,6 +1,6 @@
-# Stock vs Bazel debug APK benchmark
+# Stock vs Bazel benchmark
 
-## Question
+## Debug APK benchmark
 
 For one frozen Android app revision, is a validated debug APK faster to build with stock Flutter/Gradle or the repository's Bazel rules under cold and warm dependency conditions? Bazel also measures reuse after a Dart edit; stock has no distinct edit run because its warm scenario is a clean build.
 
@@ -75,6 +75,23 @@ Those 9 stock jobs used 59 rounded minutes and 9 Bazel jobs used 87; the 4-core 
 
 The sample is small (normally n=3). The remote-cache backend is shared, despite per-run/repeat salts; network and hosted-runner variance remain. The local Gradle mirror proof showed higher elapsed time than its uncontrolled no-mirror comparison; it verifies repository routing and correctness, not representative mirror latency. Warm cache sizes and contents differ by design between engines. The app, Flutter/Android toolchain and resolved rules revisions are recorded so results remain scoped to their exact inputs.
 
+## Host unit-test benchmark
+
+The host suite uses a separate frozen Smooth fixture (`0e1484478b62b527d26a83a52d6898504443dbb6`) with Flutter 3.47.3, Bazel 9.2.0, eight packages, 23 test files, and 246 cases. Coverage is off for both engines. `app_ref` selects the APK app only; `rules_ref` applies to both Bazel suites. A rules revision that does not run the worker on the pinned SDK fails the host gate rather than timing a silent compiler fallback.
+
+| Reported row | Fresh-runner workload |
+|---|---|
+| Stock Flutter clean | Restore the Flutter SDK and pub dependency cache, resolve frozen locks, then run the entire suite with `flutter test --no-pub --machine`. Never restore project `.dart_tool`, `build`, or test results. |
+| Bazel unchanged | No source edit. Read the matching seed from the remote cache; all 23 test targets must hit. |
+| Bazel test edit | Change one test case and its expected name, with no library edit. The edited target must execute and all 246 cases must match the declared inventory. |
+| Bazel library edit | Change one application library implementation without changing its behavior or editing a test. The affected target must execute and all 246 cases must match the baseline inventory. |
+
+Dependency preparation is measured separately. One stock setup job publishes an exact, bounded same-run dependency artifact with one-day retention. Each Bazel repetition has a cold job that seeds the remote action and test-result cache. All three readers start independently from that repetition's unchanged seed. They use read-only remote cache access, never restore a Bazel output base, and cannot share results with other repetitions, runs, or the APK suite. Seed costs are visible but do not count as additional comparison rows.
+
+The test gates check exact case identities and pass status, frozen pub inputs, matching Bazel module locks and cache lineage. The stock and Bazel seed workloads each run the two broken-input controls on repetition one, outside timed testing. Bazel must use the default test worker on kernel misses; an all-hit unchanged row need not start it.
+
+The report separates test command time, time from provider job start to a validated test result, and full provider job wall time. The validated-result clock includes SDK setup and any dependency restore, but excludes negative controls. Stock restores its SDK/pub artifact; Bazel downloads its SDK on each fresh runner and reuses action and test outputs remotely. Each Bazel row compares against the same stock clean samples. As for APKs, at least three repeats, a validated-result median at least 10 seconds lower, and non-overlapping ranges are required for a faster verdict.
+
 ## Running and reading results
 
-On the default branch, use **Actions → Stock vs Bazel debug APK benchmark → Run workflow**. Set `rules_ref` (default `main`), `app_ref` (default `6e7408fda8e46bc97a0d8f2b33a801cf27c8dabe`) and `repeats` (1–5; default 3). The first job resolves `rules_ref` to one commit SHA passed to every build. The workflow summary shows verdicts, APK/full-job medians, every row, runner vCPU/RAM, costs, hashes, provenance and any lock diff. The complete record is committed as `results/<run-id>-<attempt>.json` on the `benchmark-results` branch. A run with fewer than three repeats reports no verdicts.
+On `develop`, use **Actions → Stock vs Bazel benchmark → Run workflow**. Choose `suite` (`apk`, `test`, or `both`; default `both`), `rules_ref` (default `main`), `app_ref` (APK only; default `6e7408fda8e46bc97a0d8f2b33a801cf27c8dabe`), and `repeats` (1–5; default 3). The first job resolves `rules_ref` to a single commit. The summary reports each requested suite's validity, verdicts, row timings, and seed costs. APK reports also retain hashes and the lock-refresh evidence. The complete record is committed as `results/<run-id>-<attempt>.json` on `benchmark-results`. Runs with fewer than three repeats report times but no speed verdict.

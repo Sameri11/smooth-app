@@ -1,8 +1,16 @@
-name: Stock vs Bazel debug APK benchmark
+name: Stock vs Bazel benchmark
 
 on:
+  push:
+    branches: [feat/unit-test-benchmark]
   workflow_dispatch:
     inputs:
+      suite:
+        description: Benchmark workloads to run
+        required: true
+        default: both
+        type: choice
+        options: [apk, test, both]
       rules_ref:
         description: rules_flutter branch, tag, or commit
         required: true
@@ -31,6 +39,7 @@ concurrency:
 env:
   CI: 'true'
   FLUTTER_SUPPRESS_ANALYTICS: 'true'
+  HOST_FIXTURE_SHA: 0e1484478b62b527d26a83a52d6898504443dbb6
 
 jobs:
   resolve-rules:
@@ -52,7 +61,7 @@ jobs:
   prepare-lock:
     name: Prepare shared Bazel module lock
     needs: resolve-rules
-    if: github.repository == 'Sameri11/smooth-app'
+    if: github.repository == 'Sameri11/smooth-app' && (inputs.suite || 'both') != 'test'
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     outputs:
@@ -374,10 +383,101 @@ jobs:
     env: { ENGINE: bazel, SCENARIO: '${{ matrix.scenario }}', APK_REPEAT: '${{ matrix.repeat }}', APK_BAZEL_JOBS: '128', APK_SEED_PROOF: '${{ needs.cold-bazel-0.outputs.apk_proof }}' }
     steps: *workload
 
+  host-dependency-seed:
+    name: Test dependency seed
+    if: github.repository == 'Sameri11/smooth-app' && (inputs.suite || 'both') != 'apk'
+    needs: resolve-rules
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      ENGINE: stock
+      SCENARIO: dependencies
+      RULES_SHA: ${{ needs.resolve-rules.outputs.rules_sha }}
+    steps:
+      - &host-source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with: { persist-credentials: false }
+      - &host-tools
+        uses: ./ci/benchmark/host-action
+      - name: Resolve and pack stock dependencies
+        run: |
+          set -euo pipefail
+          python3 ci/benchmark/host/run.py prepare-stock
+          python3 ci/benchmark/host_dependency_seed.py pack
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: host-dependencies-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/host-dependency-seed/
+          retention-days: 1
+          compression-level: 0
+          if-no-files-found: error
+
+  host-stock:
+    name: Test timing / stock / clean / ${{ matrix.repeat }}
+    needs: [resolve-rules, host-dependency-seed]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        repeat: &host-repeats ${{ fromJSON((inputs.repeats || '3') == '1' && '[1]' || (inputs.repeats || '3') == '2' && '[1,2]' || (inputs.repeats || '3') == '3' && '[1,2,3]' || (inputs.repeats || '3') == '4' && '[1,2,3,4]' || '[1,2,3,4,5]') }}
+    env:
+      ENGINE: stock
+      SCENARIO: clean
+      REPETITION: ${{ matrix.repeat }}
+      RULES_SHA: ${{ needs.resolve-rules.outputs.rules_sha }}
+    steps:
+      - *host-source
+      - *host-tools
+      - name: Run clean stock host tests
+        run: python3 ci/benchmark/host/run.py run
+
+  host-bazel-seed:
+    name: Test seed / bazel / cold / ${{ matrix.repeat }}
+    if: github.repository == 'Sameri11/smooth-app' && (inputs.suite || 'both') != 'apk'
+    needs: resolve-rules
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        repeat: *host-repeats
+    env:
+      ENGINE: bazel
+      SCENARIO: cold
+      REPETITION: ${{ matrix.repeat }}
+      RULES_SHA: ${{ needs.resolve-rules.outputs.rules_sha }}
+    steps: &host-bazel
+      - *host-source
+      - *host-tools
+      - name: Run and validate Bazel host tests
+        env:
+          BAZEL_CACHE_HOST: ${{ secrets.BAZEL_CACHE_HOST }}
+          BAZEL_CACHE_PROJECT_ID: ${{ secrets.BAZEL_CACHE_PROJECT_ID }}
+          BAZEL_CACHE_TOKEN_RW: ${{ secrets.BAZEL_CACHE_TOKEN_RW }}
+        run: python3 ci/benchmark/host/run.py run
+
+  host-bazel:
+    name: Test timing / bazel / ${{ matrix.scenario }} / ${{ matrix.repeat }}
+    needs: [resolve-rules, host-bazel-seed]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        repeat: *host-repeats
+        scenario: [warm, test, lib]
+    env:
+      ENGINE: bazel
+      SCENARIO: ${{ matrix.scenario }}
+      REPETITION: ${{ matrix.repeat }}
+      RULES_SHA: ${{ needs.resolve-rules.outputs.rules_sha }}
+    steps: *host-bazel
+
   report:
     name: Analyze and preserve benchmark results
     if: always()
-    needs: [prepare-lock, cold-stock-0, cold-bazel-0, cold-stock-extra, cold-bazel-extra, stock-readers, bazel-readers]
+    needs: [resolve-rules, prepare-lock, cold-stock-0, cold-bazel-0, cold-stock-extra, cold-bazel-extra, stock-readers, bazel-readers, host-dependency-seed, host-stock, host-bazel-seed, host-bazel]
     runs-on: ubuntu-24.04
     permissions: { actions: write, contents: write }
     steps:
@@ -388,7 +488,8 @@ jobs:
       - name: Collect logs, analyze, retire seeds, and record result
         env:
           GH_TOKEN: ${{ github.token }}
-          RULES_SHA: ${{ needs.prepare-lock.outputs.rules_sha }}
+          RULES_SHA: ${{ needs.resolve-rules.outputs.rules_sha }}
+          BENCHMARK_SUITE: ${{ inputs.suite || 'both' }}
           APP_REF: "${{ inputs.app_ref || '6e7408fda8e46bc97a0d8f2b33a801cf27c8dabe' }}"
           REPEATS: "${{ inputs.repeats || '3' }}"
         run: python3 ci/benchmark/report.py

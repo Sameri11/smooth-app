@@ -1,0 +1,68 @@
+name: Prepare host test benchmark tools
+description: Restore the exact stock dependency seed or provision a fresh Flutter SDK and Bazelisk.
+runs:
+  using: composite
+  steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        ref: ${{ env.HOST_FIXTURE_SHA }}
+        path: host-app
+        persist-credentials: false
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      if: env.ENGINE == 'bazel'
+      with:
+        repository: Sameri11/rules_flutter
+        ref: ${{ env.RULES_SHA }}
+        path: host-app/.ci-rules
+        persist-credentials: false
+    - name: Set host benchmark paths
+      shell: bash
+      run: |
+        {
+          echo "FLUTTER_ROOT=$RUNNER_TEMP/flutter"
+          echo "PUB_CACHE=$RUNNER_TEMP/cache-state/pub"
+          echo "BAZELISK_HOME=$RUNNER_TEMP/cache-state/bazelisk"
+        } >> "$GITHUB_ENV"
+    - name: Download exact stock dependency seed
+      if: env.ENGINE == 'stock' && env.SCENARIO == 'clean'
+      uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0
+      with:
+        name: host-dependencies-${{ github.run_id }}-${{ github.run_attempt }}
+        path: ${{ runner.temp }}/host-dependency-seed
+    - name: Restore stock dependencies
+      if: env.ENGINE == 'stock' && env.SCENARIO == 'clean'
+      shell: bash
+      run: |
+        set -euo pipefail
+        python3 ci/benchmark/host_dependency_seed.py restore
+        sha=$(jq -er .payload.sha256 "$RUNNER_TEMP/host-dependency-seed/metadata.json")
+        echo "HOST_DEPENDENCY_SEED_SHA256=$sha" >> "$GITHUB_ENV"
+    - name: Install checksum-verified Flutter
+      if: env.ENGINE == 'bazel' || env.SCENARIO == 'dependencies'
+      shell: bash
+      run: |
+        set -euo pipefail
+        read -r version sha < <(jq -er '.flutter | "\(.version) \(.archive_sha256)"' ci/benchmark/host/inputs.json)
+        archive="$RUNNER_TEMP/host-flutter.tar.xz"
+        curl --fail --location --retry 2 --output "$archive" \
+          "https://storage.googleapis.com/flutter_infra_release/releases/stable/linux/flutter_linux_${version}-stable.tar.xz"
+        echo "$sha  $archive" | sha256sum --check
+        tar -xJf "$archive" -C "$RUNNER_TEMP"
+        rm "$archive"
+    - name: Verify installed Flutter
+      shell: bash
+      run: |
+        set -euo pipefail
+        test "$(git -C "$FLUTTER_ROOT" rev-parse HEAD)" = "$(jq -er .flutter.revision ci/benchmark/host/inputs.json)"
+        echo "$FLUTTER_ROOT/bin" >> "$GITHUB_PATH"
+        "$FLUTTER_ROOT/bin/flutter" --version
+    - name: Install checksum-verified Bazelisk
+      if: env.ENGINE == 'bazel'
+      shell: bash
+      run: |
+        set -euo pipefail
+        read -r version sha < <(jq -er '.bazelisk | "\(.version) \(.archive_sha256)"' ci/benchmark/host/inputs.json)
+        curl --fail --location --retry 2 --output "$RUNNER_TEMP/bazel" \
+          "https://github.com/bazelbuild/bazelisk/releases/download/v${version}/bazelisk-linux-amd64"
+        echo "$sha  $RUNNER_TEMP/bazel" | sha256sum --check
+        chmod +x "$RUNNER_TEMP/bazel"
