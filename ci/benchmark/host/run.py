@@ -206,6 +206,8 @@ def remote_policy(rt, scenario, repetition, *, controls=False):
     if not run_id.isdigit() or not attempt.isdigit() or not re.fullmatch(r"[0-9a-f]{40}", head):
         raise Stop("remote cache lineage needs numeric run/attempt and 40-hex GITHUB_SHA")
     salt = host_salt(run_id, attempt, head, repetition)
+    if scenario == "cold" and os.environ.get("ARM") == "toplevel":
+        salt += "/toplevel"
     rc = rt / "remote-cache.bazelrc"
     host, project, token = (need_env(k) for k in ("BAZEL_CACHE_HOST", "BAZEL_CACHE_PROJECT_ID", "BAZEL_CACHE_TOKEN_RW"))
     if "://" in host or "/" in host:
@@ -226,7 +228,9 @@ def bazel_argv(root, env, bazel, command_name, scenario, repetition, *opts, cont
     cache = rt / "cache-state"
     startup = [str(bazel), "--output_base=" + str(output_base), "--nosystem_rc", "--nohome_rc",
                "--bazelrc=" + str(rc)]
-    download = "toplevel" if scenario == "warm" and env.get("ARM") == "toplevel" else "all"
+    download = os.environ.get("ARM", "all")
+    if download not in ("all", "toplevel"):
+        raise Stop("invalid remote output download mode")
     build = ["--disk_cache=", "--remote_accept_cached=" + ("false" if mode == "seed" else "true"),
              "--remote_upload_local_results=" + ("true" if mode == "seed" else "false"),
              "--remote_cache_async=false", "--remote_download_outputs=" + download, "--announce_rc=false",
@@ -441,7 +445,7 @@ def bazel_records(root, env, bazel, scenario, repetition):
         raise Stop("JUnit file labels differ from the complete test target inventory")
     if result.returncode:
         raise Stop("Bazel test command failed")
-    return records, elapsed, lock_sha, hits, misses, len(kernels), len(workers), result.returncode
+    return records, elapsed, lock_sha, hits, misses, len(kernels), len(workers), salt
 
 
 def mutation(root, scenario):
@@ -519,6 +523,7 @@ def main(argv):
     if engine not in ("stock", "bazel") or scenario not in ("clean", "cold", "warm", "test", "lib") or not 1 <= repetition <= 5:
         raise Stop("invalid engine, scenario or repetition")
     rules_sha = None
+    salt = None
     if engine == "stock":
         if scenario != "clean":
             raise Stop("stock engine supports only clean scenario")
@@ -540,7 +545,7 @@ def main(argv):
         if scenario in ("test", "lib"):
             path, restore = mutation(root, scenario)
         try:
-            records, command_seconds, lock_sha, hits, misses, kernels, workers, _ = bazel_records(root, env, bazel, scenario, repetition)
+            records, command_seconds, lock_sha, hits, misses, kernels, workers, salt = bazel_records(root, env, bazel, scenario, repetition)
         finally:
             if restore is not None:
                 path.write_bytes(restore)
@@ -557,7 +562,6 @@ def main(argv):
     run_id, attempt, head = (os.environ.get("GITHUB_RUN_ID", "local"),
                              os.environ.get("GITHUB_RUN_ATTEMPT", "1"),
                              os.environ.get("GITHUB_SHA", "local"))
-    salt = host_salt(run_id, attempt, head, repetition) if engine == "bazel" else None
     seed_identity = {"run_id": run_id, "attempt": attempt, "workflow_sha": head,
                      "repetition": repetition, "salt": salt} if engine == "bazel" else None
     seed_sha = os.environ.get("HOST_DEPENDENCY_SEED_SHA256") if engine == "stock" else sha(
