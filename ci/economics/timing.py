@@ -10,11 +10,10 @@
       Each actual test invocation must exit nonzero and report a parsed case failure.
 
 Parsers and input guards come from probe.py, which is unchanged.
-Opt-in REMOTE_CACHE_MODE=seed|replay|read applies to the bazel engine only; stock jobs ignore it.
-Bazel then uses the configured service instead of the disk cache: cold runs seed (reads off, writes on),
-later scenarios replay (reads and writes on), and controls read (reads on, writes off). Every remote
-invocation scrubs cache keys by salt alone, keyed to the exact run, attempt, head and repetition.
-Credentials stay in a private runner rc, never in recorded arguments or uploaded logs.
+Opt-in REMOTE_CACHE_MODE=seed|read applies to the bazel engine only; stock jobs ignore it.
+Bazel uses the configured service instead of the disk cache: cold runs seed (reads off, writes on),
+later runs read (reads and writes off). Every remote invocation scrubs cache keys by exact run,
+attempt, head, repetition and compiler. Credentials stay in a private runner rc and are never recorded.
 """
 
 import argparse
@@ -52,8 +51,8 @@ TEST_NEW_NAME = "indexesOf tests Multiple occurrences (lowercase query, ignoring
 CORRUPT_NAME = "removeCharacterAt tests Position 0"
 REMOVE_NAME = "removeEmptySpaces tests String with spaces at the beginning"
 LISTED = 50
-REMOTE_MODES = ("seed", "replay", "read")
-REMOTE_SCRUB_CONFIG = "remote-scrubbing.textproto"
+REMOTE_MODES = ("seed", "read")
+COMPILERS = ("worker", "frontend_server")
 SOURCE_FILES = (TEST_FILE, LIB_FILE, "MODULE.bazel", "MODULE.bazel.lock", ".bazelversion",
                 "ci/economics/inputs.json", "ci/economics/expected-cases.json",
                 "ci/economics/remote-MODULE.bazel.lock",
@@ -248,6 +247,13 @@ def remote_mode_for(engine):
     return mode
 
 
+def compiler_identity():
+    compiler = os.environ.get("TEST_KERNEL_COMPILER", "")
+    if compiler not in COMPILERS:
+        raise probe.Stop("TEST_KERNEL_COMPILER must be worker or frontend_server")
+    return compiler
+
+
 def remote_identity(rep):
     """Exact run, attempt, head and repetition. One repetition's scenarios and controls share this salt."""
     run_id = os.environ.get("GITHUB_RUN_ID", "")
@@ -258,8 +264,9 @@ def remote_identity(rep):
         raise probe.Stop("remote salt needs numeric GITHUB_RUN_ID and GITHUB_RUN_ATTEMPT and a 40-hex GITHUB_SHA")
     if os.environ.get("REPETITION") != str(rep):
         raise probe.Stop("REPETITION must equal the --rep value %d" % rep)
+    compiler = compiler_identity()
     return {"run_id": run_id, "attempt": attempt, "head": head, "repetition": rep,
-            "salt": "%s/%s/%s/%d" % (run_id, attempt, head, rep)}
+            "compiler": compiler, "salt": "%s/%s/%s/%d/%s" % (run_id, attempt, head, rep, compiler)}
 
 
 def scrubbing_text(salt):
@@ -278,7 +285,7 @@ def scrubbing_text(salt):
 
 
 def remote_policy(rt, mode, rep):
-    """Client policy for one remote invocation. seed only writes; replay reads and writes; read only reads."""
+    """Client policy for seed writes or read-only cache lookup."""
     identity = remote_identity(rep)
     config = rt / REMOTE_SCRUB_CONFIG
     config.write_text(scrubbing_text(identity["salt"]))
@@ -290,11 +297,11 @@ def remote_policy(rt, mode, rep):
 
 
 def timed_remote(engine, scenario, rep, rt):
-    """Cold seeds the remote cache; each later scenario replays the same repetition's history."""
+    """Cold seeds the remote cache; later scenarios read it without writes."""
     mode = remote_mode_for(engine)
     if mode is None:
         return None
-    wanted = "seed" if scenario == "cold" else "replay"
+    wanted = "seed" if scenario == "cold" else "read"
     if mode != wanted:
         raise probe.Stop("%s runs require REMOTE_CACHE_MODE=%s, not %s" % (scenario, wanted, mode))
     return remote_policy(rt, mode, rep)
@@ -542,30 +549,63 @@ def build_metrics(events):
     return None
 
 
+def compiler_spawns(path):
+    """Keep only execution facts for the two test-compiler mnemonics, never argv or environment."""
+    if not path.is_file():
+        raise probe.Stop("bazel test wrote no execution log")
+    selected = {"DartTestKernel", "TestKernelDriver"}
+    spawns = []
+    with path.open() as stream:
+        for line in stream:
+            entry = json.loads(line)
+            if entry.get("mnemonic") in selected:
+                spawns.append({
+                    "mnemonic": entry["mnemonic"],
+                    "runner": entry.get("runner", ""),
+                    "cache_hit": entry.get("cacheHit", False),
+                    "label": entry.get("targetLabel"),
+                    "total_time": entry.get("metrics", {}).get("totalTime"),
+                })
+    return spawns
+
+
 def bazel_job(rt, env, recorder, manifest, data, scenario, expected, defaults, remote):
     if not (rt / "bazel").is_file():
         raise probe.Stop("Bazelisk is not installed at %s" % (rt / "bazel"))
-    frozen = data["bazel_module_lock_sha256"]
+    compiler = compiler_identity()
+    phase = os.environ.get("HOST_TIMING_PHASE", "")
+    if phase not in ("readiness", "timing"):
+        raise probe.Stop("HOST_TIMING_PHASE must be readiness or timing")
+    digest = os.environ.get("BAZEL_MODULE_LOCK_SHA256", "")
+    if phase == "readiness" and digest:
+        raise probe.Stop("readiness must not set BAZEL_MODULE_LOCK_SHA256")
+    if phase == "timing" and not re.fullmatch(r"[0-9a-f]{64}", digest):
+        raise probe.Stop("timing requires a 64-hex BAZEL_MODULE_LOCK_SHA256")
     lock = ROOT / "MODULE.bazel.lock"
-    if scenario != "cold" and probe.digest(lock) != frozen:
-        raise probe.Stop("module lock is absent or differs from the frozen digest before a %s run" % scenario)
+    mode = "update" if scenario in ("cold", "lib") else "error"
+    if mode == "error" and probe.digest(lock) != digest:
+        raise probe.Stop("timing lock differs from BAZEL_MODULE_LOCK_SHA256 before %s" % scenario)
     labels = {"//%s:%s" % (pkg, rel[: -len(".dart")]) for pkg in PACKAGES for rel in defaults[pkg]}
     raw = rt / "bep-raw.json"
+    execution_log = rt / "test-compiler-spawns.jsonl"
     if raw.exists():
         raw.unlink()
-    mode = "update" if scenario == "cold" else "error"
     ensure_tool_package_config(rt, env, recorder)
     ensure_consumer_generated_inputs(rt, env, recorder)
     probe.check_inputs(manifest, "before bazel test")
     with recorder.span("tests"):
         test = recorder.command("bazel-test", bazel_argv(
             rt, "test", "--lockfile_mode=" + mode, "--keep_going", "--test_output=errors",
-            "--build_event_json_file=" + str(raw), *["//%s:tests" % pkg for pkg in PACKAGES],
+            "--@rules_flutter_core//flutter:test_kernel_compiler=" + compiler,
+            "--build_event_json_file=" + str(raw), "--execution_log_json_file=" + str(execution_log),
+            "--noexecution_log_sort", *["//%s:tests" % pkg for pkg in PACKAGES],
             remote=remote), ROOT, env)
     probe.check_inputs(manifest, "after bazel test")
     if lock.is_file():
         probe.copy_artifact(lock, OUT / "bazel" / "MODULE.bazel.lock")
-    lock_ok = probe.digest(lock) == frozen
+    actual_lock = probe.digest(lock)
+    if phase == "timing" and actual_lock != digest:
+        raise probe.Stop("generated module lock differs from BAZEL_MODULE_LOCK_SHA256")
     if not raw.is_file():
         raise probe.Stop("bazel test wrote no build event stream")
     events = parse_events(raw.read_text())
@@ -574,7 +614,21 @@ def bazel_job(rt, env, recorder, manifest, data, scenario, expected, defaults, r
     (OUT / "bazel" / "bep-filtered.jsonl").write_text(
         "".join(json.dumps(e, sort_keys=True) + "\n" for e in filtered))
     bep = bep_gate(scenario, events, labels)
-    bep["build_metrics"] = build_metrics(events)
+    metrics = build_metrics(events)
+    bep["build_metrics"] = metrics
+    spawns = compiler_spawns(execution_log)
+    drivers = [spawn for spawn in spawns if spawn["mnemonic"] == "TestKernelDriver"]
+    kernels = [spawn for spawn in spawns if spawn["mnemonic"] == "DartTestKernel" and not spawn["cache_hit"]]
+    worker_count = sum("worker" in spawn["runner"].lower() for spawn in kernels)
+    bep["compiler_execution"] = {"compiler": compiler, "worker_kernel_spawns": worker_count, "spawns": spawns}
+    if compiler == "worker" and (not kernels or worker_count != len(kernels)):
+        bep["problems"].append("executed DartTestKernel actions must use the worker")
+    if compiler == "worker" and scenario == "cold" and not any(not spawn["cache_hit"] for spawn in drivers):
+        bep["problems"].append("cold worker invocation must execute TestKernelDriver")
+    if compiler == "frontend_server" and (worker_count or drivers):
+        bep["problems"].append("frontend_server must not involve the worker or its driver")
+    bep["verdict"] = "fail" if bep["problems"] else "pass"
+    lock_ok = actual_lock is not None and (phase == "readiness" or actual_lock == digest)
     remote_summary = None
     if remote:
         remote_hits = sum(entry["cachedRemotely"] for entry in bep["per_label"].values())
@@ -582,8 +636,10 @@ def bazel_job(rt, env, recorder, manifest, data, scenario, expected, defaults, r
                           "usage_bytes": None, "backend_bill": None}
         if remote["mode"] == "seed" and bep["cache_hits"]:
             bep["problems"].append("seed must execute without cache reads")
-        if remote["mode"] == "replay" and scenario == "warm" and not remote_hits:
-            bep["problems"].append("unchanged replay produced no remote test-result hits")
+        if remote["mode"] == "seed" and not (metrics or {}).get("actions_executed"):
+            bep["problems"].append("cold seed must execute actions")
+        if remote["mode"] == "read" and scenario in ("test", "lib") and not remote_hits:
+            bep["problems"].append("read mode produced no remote test-result cache hits")
         bep["verdict"] = "fail" if bep["problems"] else "pass"
     packages = {}
     for pkg in PACKAGES:
@@ -601,9 +657,9 @@ def bazel_job(rt, env, recorder, manifest, data, scenario, expected, defaults, r
     verdict = probe.aggregate(
         [p["verdict"] for p in packages.values()] + [bep["verdict"], "pass" if test["exit_code"] == 0 else "fail",
                                                      "pass" if lock_ok else "fail"])
-    return {"exit_code": test["exit_code"], "module_lock": {"frozen_sha256": frozen,
-            "before_sha256": None if scenario == "cold" else frozen,
-            "after_sha256": probe.digest(lock), "copied": "bazel/MODULE.bazel.lock",
+    return {"exit_code": test["exit_code"], "module_lock": {"frozen_sha256": digest or actual_lock,
+            "before_sha256": None if mode == "update" else digest,
+            "after_sha256": actual_lock, "copied": "bazel/MODULE.bazel.lock",
             "verdict": "pass" if lock_ok else "fail"},
             "remote_cache": remote_summary, "bep": bep, "packages": packages, "verdict": verdict}
 
@@ -614,7 +670,9 @@ def run_timed(engine, scenario, rep):
     recorder = Recorder()
     report = {"mode": "timed", "classification": "host_timing_no_coverage", "engine": engine,
               "scenario": scenario, "rep": rep, "workflow_revision": os.environ.get("GITHUB_SHA"),
-              "runner_image": os.environ.get("ImageVersion"), "mutation": None,
+              "runner_image": os.environ.get("ImageVersion"),
+              "compiler": compiler_identity() if engine == "bazel" else None,
+              "timing_phase": os.environ.get("HOST_TIMING_PHASE"), "mutation": None,
               "required_result": None, "remote_cache": None, "verdict": "fail", "exit_code": 1, "stopped": None}
     try:
         env = job_env(engine, rt)
@@ -708,7 +766,9 @@ def run_controls(engine, rep):
                     ensure_consumer_generated_inputs(rt, env, recorder, "control-smooth-pub-get-" + control)
                     phase = recorder.command("control-" + control, bazel_argv(
                         rt, "test", "--lockfile_mode=error",
-                        "--test_output=errors", TARGET, remote=remote), ROOT, env)
+                        "--test_output=errors",
+                        "--@rules_flutter_core//flutter:test_kernel_compiler=" + compiler_identity(),
+                        TARGET, remote=remote), ROOT, env)
                     xml = ROOT / "bazel-testlogs" / SMOOTH / TEST_STEM / "test.xml"
                     if xml.is_file():
                         probe.copy_artifact(xml, OUT / "controls" / (control + ".test.xml"))

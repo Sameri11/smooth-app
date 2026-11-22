@@ -1,5 +1,5 @@
-name: Matched host workload
-description: Measure setup, host tests and write-enabled cache publication.
+name: Host test compiler timing
+description: Measure one fresh-runner Bazel test invocation and validate the case inventory.
 inputs:
   cache-host:
     description: Remote cache host.
@@ -23,94 +23,31 @@ runs:
           if [ "$SCENARIO" = cold ]; then
             echo "REMOTE_CACHE_MODE=seed"
           else
-            echo "REMOTE_CACHE_MODE=replay"
+            echo "REMOTE_CACHE_MODE=read"
           fi
         } >> "$GITHUB_ENV"
         python3 ci/economics/clock.py begin
-        python3 ci/economics/clock.py write-enabled-replay
-    - name: Name exact cache lineage
-      id: keys
-      shell: bash
-      run: python3 ci/economics/lifecycle.py keys
-    - name: Retire previous repetition snapshots
-      if: env.ENGINE == 'flutter' && env.SCENARIO == 'cold'
-      shell: bash
-      env:
-        GH_TOKEN: ${{ github.token }}
-      run: python3 ci/economics/lifecycle.py retire
     - name: Check out pinned rules
-      if: env.ENGINE == 'bazel'
       uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       with:
         repository: Sameri11/rules_flutter
         ref: 6ab5ab906916abfdbd80d8a843bee87df500766d
         path: .ci-rules
         persist-credentials: false
-    - name: Start snapshot restore clock
-      if: env.SCENARIO != 'cold'
-      shell: bash
-      run: python3 ci/economics/clock.py download-start
-    - name: Restore exact paired seed
-      if: env.SCENARIO != 'cold'
-      id: seed
-      uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
-      with:
-        path: ${{ runner.temp }}/cache-export
-        key: ${{ steps.keys.outputs.seed }}
-        fail-on-cache-miss: true
-    - name: Verify exact seed and unpack
-      if: env.SCENARIO != 'cold'
-      shell: bash
-      env:
-        EXPECTED_KEY: ${{ steps.keys.outputs.seed }}
-        MATCHED_KEY: ${{ steps.seed.outputs.cache-matched-key }}
-        CACHE_HIT: ${{ steps.seed.outputs.cache-hit }}
-      run: |
-        test "$CACHE_HIT" = true
-        test "$EXPECTED_KEY" = "$MATCHED_KEY"
-        python3 ci/economics/clock.py download-end
-        python3 ci/economics/cache.py restore --engine "$ENGINE" --scenario "$SCENARIO" --rep "$REPETITION" --ancestor cold --component all
-        rm -rf "$RUNNER_TEMP/cache-export"
-    - name: Start edited snapshot restore clock
-      if: env.ENGINE == 'flutter' && env.SCENARIO == 'lib'
-      shell: bash
-      run: python3 ci/economics/clock.py edited-download-start
-    - name: Restore preceding test build state
-      if: env.ENGINE == 'flutter' && env.SCENARIO == 'lib'
-      id: edited
-      uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
-      with:
-        path: ${{ runner.temp }}/cache-export
-        key: host-replay-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}-flutter-${{ env.REPETITION }}-test
-        fail-on-cache-miss: true
-    - name: Verify exact predecessor and unpack
-      if: env.ENGINE == 'flutter' && env.SCENARIO == 'lib'
-      shell: bash
-      env:
-        EXPECTED_KEY: host-replay-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}-flutter-${{ env.REPETITION }}-test
-        MATCHED_KEY: ${{ steps.edited.outputs.cache-matched-key }}
-        CACHE_HIT: ${{ steps.edited.outputs.cache-hit }}
-      run: |
-        test "$CACHE_HIT" = true
-        test "$EXPECTED_KEY" = "$MATCHED_KEY"
-        python3 ci/economics/clock.py edited-download-end
-        python3 ci/economics/cache.py restore --engine "$ENGINE" --scenario "$SCENARIO" --rep "$REPETITION" --ancestor test --component build
-        rm -rf "$RUNNER_TEMP/cache-export"
     - name: Install checksum-verified Flutter
-      if: env.SCENARIO == 'cold'
       shell: bash
       run: |
         set -euo pipefail
         python3 ci/economics/clock.py sdk-install-start
+        read -r version sha < <(jq -er '.flutter | "\(.version) \(.archive_sha256)"' ci/economics/inputs.json)
         archive="$RUNNER_TEMP/flutter.tar.xz"
-        curl --fail --location --output "$archive" \
-          "https://storage.googleapis.com/flutter_infra_release/releases/stable/linux/flutter_linux_3.41.8-stable.tar.xz"
-        echo "0c7e47fc39ef86290b41707d687bdca7f82b277267a6ef74717f8e88ac423de1  $archive" | sha256sum --check
+        curl --fail --location --retry 2 --output "$archive" \
+          "https://storage.googleapis.com/flutter_infra_release/releases/stable/linux/flutter_linux_${version}-stable.tar.xz"
+        echo "$sha  $archive" | sha256sum --check
         tar -xJf "$archive" -C "$RUNNER_TEMP"
         rm "$archive"
         python3 ci/economics/clock.py sdk-install-end
     - name: Install checksum-verified Bazelisk
-      if: env.ENGINE == 'bazel' && env.SCENARIO == 'cold'
       shell: bash
       run: |
         set -euo pipefail
@@ -126,7 +63,7 @@ runs:
         set -euo pipefail
         echo "$RUNNER_TEMP/flutter/bin" >> "$GITHUB_PATH"
         echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
-        test "$(git -C "$FLUTTER_ROOT" rev-parse HEAD)" = 02085feb3f5d8a8156e5e28512b9d99351d510c0
+        test "$(git -C "$FLUTTER_ROOT" rev-parse HEAD)" = "$(jq -er .flutter.revision ci/economics/inputs.json)"
         "$FLUTTER_ROOT/bin/flutter" --version
         python3 ci/economics/clock.py tools-ready
     - name: Run and gate matched host workload
@@ -136,32 +73,8 @@ runs:
         BAZEL_CACHE_PROJECT_ID: ${{ inputs.cache-project }}
         BAZEL_CACHE_TOKEN_RW: ${{ inputs.cache-token }}
       run: python3 ci/economics/timing.py run --engine "$ENGINE" --scenario "$SCENARIO" --rep "$REPETITION"
-    - name: Pack published cache state
-      id: pack
-      shell: bash
-      run: python3 ci/economics/cache.py pack --engine "$ENGINE" --scenario "$SCENARIO" --rep "$REPETITION"
-    - name: Start snapshot publication clock
-      if: steps.pack.outputs.upload == 'true'
-      shell: bash
-      run: python3 ci/economics/clock.py upload-start
-    - name: Publish exact snapshot
-      if: steps.pack.outputs.upload == 'true'
-      uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830
-      with:
-        path: ${{ runner.temp }}/cache-export
-        key: ${{ steps.keys.outputs.updated }}
-    - name: Verify published snapshot and storage bounds
-      if: steps.pack.outputs.upload == 'true'
-      shell: bash
-      env:
-        GH_TOKEN: ${{ github.token }}
-      run: python3 ci/economics/lifecycle.py verify
-    - name: Finish snapshot publication clock
-      if: steps.pack.outputs.upload == 'true'
-      shell: bash
-      run: python3 ci/economics/clock.py upload-end
     - name: Prove rejection of broken tests and library
-      if: env.SCENARIO == 'cold' && env.REPETITION == '1'
+      if: env.HOST_TIMING_PHASE == 'readiness'
       shell: bash
       env:
         BAZEL_CACHE_HOST: ${{ inputs.cache-host }}
@@ -171,10 +84,10 @@ runs:
         python3 ci/economics/clock.py controls-start
         python3 ci/economics/timing.py controls --engine "$ENGINE" --rep "$REPETITION"
         python3 ci/economics/clock.py controls-end
-    - name: Remove runner credentials
+    - name: Remove credentials and raw diagnostics
       if: always()
       shell: bash
-      run: rm -f "$RUNNER_TEMP/remote-cache.bazelrc" "$RUNNER_TEMP/bep-raw.json"
+      run: rm -f "$RUNNER_TEMP/remote-cache.bazelrc" "$RUNNER_TEMP/bep-raw.json" "$RUNNER_TEMP/test-compiler-spawns.jsonl"
     - name: Check compact evidence size
       id: evidence
       if: always()
@@ -184,7 +97,7 @@ runs:
       if: always() && steps.evidence.outcome == 'success'
       uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
       with:
-        name: evidence-${{ env.ENGINE }}-${{ env.SCENARIO }}-${{ env.REPETITION }}
+        name: evidence-${{ env.HOST_TIMING_PHASE }}-${{ env.TEST_KERNEL_COMPILER }}-${{ env.SCENARIO }}-${{ env.REPETITION }}
         path: ${{ runner.temp }}/smooth-ci-evidence
         retention-days: 1
         if-no-files-found: error
