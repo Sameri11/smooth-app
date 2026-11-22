@@ -556,17 +556,23 @@ def compiler_spawns(path):
         raise probe.Stop("bazel test wrote no execution log")
     selected = {"DartTestKernel", "TestKernelDriver"}
     spawns = []
-    with path.open() as stream:
-        for line in stream:
-            entry = json.loads(line)
-            if entry.get("mnemonic") in selected:
-                spawns.append({
-                    "mnemonic": entry["mnemonic"],
-                    "runner": entry.get("runner", ""),
-                    "cache_hit": entry.get("cacheHit", False),
-                    "label": entry.get("targetLabel"),
-                    "total_time": entry.get("metrics", {}).get("totalTime"),
-                })
+    # Bazel's expanded JSON writer concatenates pretty-printed protobuf objects.
+    content = path.read_text()
+    decoder = json.JSONDecoder()
+    position = 0
+    while position < len(content):
+        if content[position].isspace():
+            position += 1
+            continue
+        entry, position = decoder.raw_decode(content, position)
+        if entry.get("mnemonic") in selected:
+            spawns.append({
+                "mnemonic": entry["mnemonic"],
+                "runner": entry.get("runner", ""),
+                "cache_hit": entry.get("cacheHit", False),
+                "label": entry.get("targetLabel"),
+                "total_time": entry.get("metrics", {}).get("totalTime"),
+            })
     return spawns
 
 
