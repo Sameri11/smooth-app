@@ -88,6 +88,7 @@ def collect():
     actual = [name for name in by_name if name == "Test dependency seed" or name.startswith("Test timing /") or name.startswith("Test seed /")]
     if sorted(actual) != sorted(names):
         errors.append("host test job matrix differs from expected matrix")
+    table = {}
     validation_state = {"lock_sha": None, "seeds": {}}
     for name in names:
         matches = by_name.get(name, [])
