@@ -53,6 +53,7 @@ REMOVE_NAME = "removeEmptySpaces tests String with spaces at the beginning"
 LISTED = 50
 REMOTE_MODES = ("seed", "read")
 COMPILERS = ("worker", "frontend_server")
+REMOTE_SCRUB_CONFIG = "remote-scrubbing.textproto"
 SOURCE_FILES = (TEST_FILE, LIB_FILE, "MODULE.bazel", "MODULE.bazel.lock", ".bazelversion",
                 "ci/economics/inputs.json", "ci/economics/expected-cases.json",
                 "ci/economics/remote-MODULE.bazel.lock",
