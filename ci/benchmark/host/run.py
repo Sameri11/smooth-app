@@ -22,6 +22,7 @@ TEST_FILE = SMOOTH + "/test/utils/string_extensions_test.dart"
 LIB_FILE = SMOOTH + "/lib/helpers/string_extension.dart"
 TEST_OLD = "Multiple occurrence (without case)"
 TEST_NEW = "Multiple occurrences (lowercase query, ignoring case)"
+SMOOTH_TEST_DEPS_REGEX = r"^bazel-out/[^/]+/bin/external/[^/]+\+pub\+pub_smooth_app/test_deps\.dill$"
 
 
 class Stop(RuntimeError):
@@ -206,8 +207,6 @@ def remote_policy(rt, scenario, repetition, *, controls=False):
     if not run_id.isdigit() or not attempt.isdigit() or not re.fullmatch(r"[0-9a-f]{40}", head):
         raise Stop("remote cache lineage needs numeric run/attempt and 40-hex GITHUB_SHA")
     salt = host_salt(run_id, attempt, head, repetition)
-    if scenario == "cold" and os.environ.get("ARM") == "toplevel":
-        salt += "/toplevel"
     rc = rt / "remote-cache.bazelrc"
     host, project, token = (need_env(k) for k in ("BAZEL_CACHE_HOST", "BAZEL_CACHE_PROJECT_ID", "BAZEL_CACHE_TOKEN_RW"))
     if "://" in host or "/" in host:
@@ -228,14 +227,17 @@ def bazel_argv(root, env, bazel, command_name, scenario, repetition, *opts, cont
     cache = rt / "cache-state"
     startup = [str(bazel), "--output_base=" + str(output_base), "--nosystem_rc", "--nohome_rc",
                "--bazelrc=" + str(rc)]
-    download = os.environ.get("ARM", "all")
-    if download not in ("all", "toplevel"):
-        raise Stop("invalid remote output download mode")
+    arm = os.environ.get("ARM", "all")
+    if arm not in ("all", "toplevel", "selective") or (arm == "selective" and scenario != "lib"):
+        raise Stop("invalid remote output download arm for " + scenario)
+    download = "all" if arm == "all" else "toplevel"
     build = ["--disk_cache=", "--remote_accept_cached=" + ("false" if mode == "seed" else "true"),
              "--remote_upload_local_results=" + ("true" if mode == "seed" else "false"),
              "--remote_cache_async=false", "--remote_download_outputs=" + download, "--announce_rc=false",
              "--experimental_remote_scrubbing_config=" + str(scrub),
              "--repository_cache=" + str(cache / "repository"), "--repo_env=FLUTTER_ROOT=" + env["FLUTTER_ROOT"]]
+    if arm == "selective":
+        build.append("--remote_download_regex=" + SMOOTH_TEST_DEPS_REGEX)
     return [*startup, command_name, *build, *opts], mode, salt
 
 
@@ -379,6 +381,11 @@ def bazel_records(root, env, bazel, scenario, repetition):
         "--lockfile_mode=update", "--keep_going", "--test_output=errors",
         "--build_event_json_file=" + str(raw), "--execution_log_json_file=" + str(execution),
         "--noexecution_log_sort", *profile_flags, *["//" + p + ":tests" for p in PACKAGES])
+    policy_flags = [arg for arg in args if arg.startswith((
+        "--remote_download_outputs=", "--remote_download_regex=",
+        "--remote_accept_cached=", "--remote_upload_local_results=", "--disk_cache=",
+    ))]
+    print("HOST_DOWNLOAD_FLAGS " + json.dumps(policy_flags), flush=True)
     start = time.monotonic()
     result = subprocess.run(args, cwd=root, env=env)
     elapsed = time.monotonic() - start
@@ -445,6 +452,13 @@ def bazel_records(root, env, bazel, scenario, repetition):
         raise Stop("JUnit file labels differ from the complete test target inventory")
     if result.returncode:
         raise Stop("Bazel test command failed")
+    execroot = rt / "bazel-output" / "execroot" / "_main"
+    materialized = sorted(
+        p.relative_to(execroot).as_posix()
+        for p in execroot.glob("bazel-out/*/bin/external/*/test_deps.dill")
+        if re.fullmatch(SMOOTH_TEST_DEPS_REGEX, p.relative_to(execroot).as_posix()) and p.is_file()
+    )
+    print("HOST_TEST_DEPS_MATERIALIZED " + json.dumps(materialized), flush=True)
     return records, elapsed, lock_sha, hits, misses, len(kernels), len(workers), salt
 
 

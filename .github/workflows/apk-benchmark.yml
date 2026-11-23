@@ -2,7 +2,7 @@ name: Stock vs Bazel benchmark
 
 on:
   push:
-    branches: [prototype/host-download-matrix]
+    branches: [prototype/host-selective-download]
   workflow_dispatch:
     inputs:
       suite:
@@ -385,7 +385,7 @@ jobs:
 
   host-dependency-seed:
     name: Test dependency seed
-    if: github.repository == 'Sameri11/smooth-app' && (inputs.suite || 'test') != 'apk'
+    if: github.event_name != 'push' && github.repository == 'Sameri11/smooth-app' && inputs.suite != 'apk'
     needs: resolve-rules
     runs-on: ubuntu-24.04
     timeout-minutes: 30
@@ -459,16 +459,7 @@ jobs:
           HOST_BAZEL_PROFILE: ${{ runner.temp }}/host-bazel-profile.raw.gz
         run: |
           set -euo pipefail
-          swift=$(command -v swiftc)
-          test "$swift" = /usr/local/bin/swiftc
-          hidden="$swift.host-benchmark-hidden"
-          test ! -e "$hidden" && test ! -L "$hidden"
-          sudo mv -- "$swift" "$hidden"
-          trap 'sudo mv -- "$hidden" "$swift"' EXIT
-          if command -v swiftc; then
-            echo "another swiftc is visible on PATH" >&2
-            exit 1
-          fi
+          lscpu | grep -E '^(CPU\(s\)|Model name):'
           echo "HOST_PROBE_ARM $ARM"
           result=0
           python3 ci/benchmark/host/run.py run || result=$?
@@ -506,26 +497,8 @@ jobs:
           retention-days: 7
           if-no-files-found: warn
 
-  host-bazel-cold-toplevel:
-    name: Test cold / toplevel / ${{ matrix.repeat }}
-    if: github.repository == 'Sameri11/smooth-app' && (inputs.suite || 'test') != 'apk'
-    needs: resolve-rules
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
-    strategy:
-      fail-fast: false
-      matrix:
-        repeat: [1, 2, 3]
-    env:
-      ENGINE: bazel
-      SCENARIO: cold
-      REPETITION: ${{ matrix.repeat }}
-      ARM: toplevel
-      RULES_SHA: ${{ needs.resolve-rules.outputs.rules_sha }}
-    steps: *host-bazel
-
   host-bazel:
-    name: Test ${{ matrix.scenario }} / ${{ matrix.arm }} / ${{ matrix.repeat }}
+    name: Test lib / ${{ matrix.arm }} / ${{ matrix.repeat }}
     needs: [resolve-rules, host-bazel-seed]
     runs-on: ubuntu-24.04
     timeout-minutes: 30
@@ -533,11 +506,10 @@ jobs:
       fail-fast: false
       matrix:
         repeat: [1, 2, 3]
-        arm: [all, toplevel]
-        scenario: [warm, test, lib]
+        arm: [all, toplevel, selective]
     env:
       ENGINE: bazel
-      SCENARIO: ${{ matrix.scenario }}
+      SCENARIO: lib
       ARM: ${{ matrix.arm }}
       REPETITION: ${{ matrix.repeat }}
       RULES_SHA: ${{ needs.resolve-rules.outputs.rules_sha }}
