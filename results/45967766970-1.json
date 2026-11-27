@@ -1,0 +1,1668 @@
+{
+  "apk_valid": false,
+  "app_commit": null,
+  "app_ref": "ca47184e45dcb51a8726f1a370486f62baa0fb41",
+  "comparisons": [
+    {
+      "bazel_critical_path_components_median_seconds": {},
+      "bazel_critical_path_median_seconds": null,
+      "bazel_rows_from": "cold",
+      "full_job_median_seconds": {},
+      "n": 0,
+      "rows_seconds": {
+        "bazel": [
+          null,
+          null,
+          null
+        ],
+        "stock": [
+          null,
+          null,
+          null
+        ]
+      },
+      "scenario": "cold",
+      "stock_rows_from": "cold",
+      "validated_apk_median_seconds": {},
+      "verdict": "invalid"
+    },
+    {
+      "bazel_critical_path_components_median_seconds": {},
+      "bazel_critical_path_median_seconds": null,
+      "bazel_rows_from": "warm",
+      "full_job_median_seconds": {},
+      "n": 0,
+      "rows_seconds": {
+        "bazel": [
+          null,
+          null,
+          null
+        ],
+        "stock": [
+          null,
+          null,
+          null
+        ]
+      },
+      "scenario": "warm",
+      "stock_rows_from": "warm",
+      "validated_apk_median_seconds": {},
+      "verdict": "invalid"
+    },
+    {
+      "bazel_critical_path_components_median_seconds": {},
+      "bazel_critical_path_median_seconds": null,
+      "bazel_rows_from": "lib",
+      "full_job_median_seconds": {},
+      "n": 0,
+      "rows_seconds": {
+        "bazel": [
+          null,
+          null,
+          null
+        ],
+        "stock": [
+          null,
+          null,
+          null
+        ]
+      },
+      "scenario": "edit",
+      "stock_rows_from": "warm",
+      "validated_apk_median_seconds": {},
+      "verdict": "invalid"
+    }
+  ],
+  "cost": {
+    "bazel": {
+      "2_core_proxy_usd": 0.0,
+      "4_core_proxy_usd": 0.0,
+      "jobs": 0,
+      "public_compute_usd": 0,
+      "rounded_job_minutes": 0
+    },
+    "stock": {
+      "2_core_proxy_usd": 0.0,
+      "4_core_proxy_usd": 0.0,
+      "jobs": 0,
+      "public_compute_usd": 0,
+      "rounded_job_minutes": 0
+    }
+  },
+  "host_tests": {
+    "comparisons": [
+      {
+        "command_median_seconds": 83.397,
+        "engine": "stock",
+        "full_job_median_seconds": 160.0,
+        "n": 3,
+        "rows_seconds": [
+          150.7015974521637,
+          179.1629581451416,
+          134.10857582092285
+        ],
+        "scenario": "clean",
+        "validated_result_median_seconds": 150.7015974521637
+      },
+      {
+        "command_median_seconds": 124.623,
+        "engine": "bazel",
+        "full_job_median_seconds": 223.0,
+        "n": 3,
+        "rows_seconds": [
+          203.11072826385498,
+          199.88886404037476,
+          318.1141903400421
+        ],
+        "scenario": "cold",
+        "validated_result_median_seconds": 203.11072826385498
+      },
+      {
+        "command_median_seconds": 80.299,
+        "engine": "bazel",
+        "full_job_median_seconds": 178.0,
+        "n": 3,
+        "rows_seconds": [
+          177.28361439704895,
+          162.18501710891724,
+          154.0223696231842
+        ],
+        "scenario": "warm",
+        "validated_result_median_seconds": 162.18501710891724
+      },
+      {
+        "command_median_seconds": 108.376,
+        "engine": "bazel",
+        "full_job_median_seconds": 223.0,
+        "n": 3,
+        "rows_seconds": [
+          154.4045991897583,
+          228.14133596420288,
+          213.25117325782776
+        ],
+        "scenario": "test",
+        "validated_result_median_seconds": 213.25117325782776
+      },
+      {
+        "command_median_seconds": 101.327,
+        "engine": "bazel",
+        "full_job_median_seconds": 189.0,
+        "n": 3,
+        "rows_seconds": [
+          207.01226377487183,
+          184.27400660514832,
+          182.73610854148865
+        ],
+        "scenario": "lib",
+        "validated_result_median_seconds": 184.27400660514832
+      },
+      {
+        "bazel_median_seconds": 162.18501710891724,
+        "bazel_rows_from": "warm",
+        "comparison": "warm",
+        "n": 3,
+        "stock_median_seconds": 150.7015974521637,
+        "stock_rows_from": "clean",
+        "verdict": "no significant difference"
+      },
+      {
+        "bazel_median_seconds": 213.25117325782776,
+        "bazel_rows_from": "test",
+        "comparison": "test",
+        "n": 3,
+        "stock_median_seconds": 150.7015974521637,
+        "stock_rows_from": "clean",
+        "verdict": "no significant difference"
+      },
+      {
+        "bazel_median_seconds": 184.27400660514832,
+        "bazel_rows_from": "lib",
+        "comparison": "lib",
+        "n": 3,
+        "stock_median_seconds": 150.7015974521637,
+        "stock_rows_from": "clean",
+        "verdict": "no significant difference"
+      }
+    ],
+    "fixture_sha": "0e1484478b62b527d26a83a52d6898504443dbb6",
+    "issues": [],
+    "repeats": 3,
+    "rows": [
+      {
+        "conclusion": "success",
+        "job_id": 140400979922,
+        "job_ids": [
+          140400979922
+        ],
+        "name": "Test dependency seed",
+        "prepare_stock": {
+          "engine": "stock",
+          "fixture": {
+            "sha": "0e1484478b62b527d26a83a52d6898504443dbb6"
+          },
+          "kind": "prepare-stock",
+          "lineage": {
+            "attempt": "1",
+            "run_id": "45967766970",
+            "salt": null,
+            "workflow_sha": "259a98baab796f39d2cc9eacd8a7817307ba0201"
+          },
+          "lock": {
+            "mode": "not-applicable",
+            "sha256": null
+          },
+          "repetition": 1,
+          "rules": {
+            "sha": null
+          },
+          "scenario": "clean",
+          "schema": 1,
+          "seed": {
+            "package_config_sha256": "e729fe98790e2b25eccab1eef894da9f7b7f9773615015341e5646efd7021300",
+            "pub_cache_entries": 42857,
+            "pub_cache_path": "/home/runner/work/_temp/cache-state/pub",
+            "sdk_revision": "e8113bf45620cbeb8aff64947ee4c93e16adb4cf"
+          }
+        },
+        "provider_seconds": 134.0,
+        "seed": {
+          "identity": {
+            "fixture_sha": "0e1484478b62b527d26a83a52d6898504443dbb6",
+            "head_sha": "259a98baab796f39d2cc9eacd8a7817307ba0201",
+            "run_attempt": "1",
+            "run_id": "45967766970",
+            "sdk_version": "3.47.3"
+          },
+          "pack_wall_seconds": 8.505819,
+          "payload": {
+            "bytes": 1921911578,
+            "file": "seed.tar.zst",
+            "sha256": "8a7513c5cfabfebd87db50962ce26421d0d65f112122a5091d42f72e8c18edb3"
+          },
+          "schema": 1
+        },
+        "status": "completed"
+      },
+      {
+        "conclusion": "success",
+        "job_id": 140401956147,
+        "job_ids": [
+          140401956147
+        ],
+        "name": "Test timing / stock / clean / 1",
+        "proof": {
+          "cache": {
+            "mode": "read",
+            "read_only": true,
+            "seed_identity": null,
+            "seed_kind": "stock-dependency",
+            "seed_sha256": "8a7513c5cfabfebd87db50962ce26421d0d65f112122a5091d42f72e8c18edb3",
+            "test_result_hits": 0,
+            "test_result_misses": 0
+          },
+          "cases": {
+            "expected": 246,
+            "inventory_sha256": "6474e0e20dcb121f263be7291604e97a724b05a0afe39e9bcfced835ed627c40",
+            "observed": 246
+          },
+          "controls": {
+            "cases": 2,
+            "lock_mode": null,
+            "lock_sha256": null,
+            "rejections": 2,
+            "results": [
+              {
+                "case": "removeCharacterAt tests Position 0",
+                "name": "corrupted-assertion",
+                "rejected": true
+              },
+              {
+                "case": "removeEmptySpaces tests String with spaces at the beginning",
+                "name": "identity-remove-spaces",
+                "rejected": true
+              }
+            ],
+            "status": "pass"
+          },
+          "driver": {
+            "kernel_executions": 0,
+            "name": "flutter",
+            "worker_spawns": 0,
+            "worker_strategy": null
+          },
+          "engine": "stock",
+          "fixture": {
+            "sha": "0e1484478b62b527d26a83a52d6898504443dbb6"
+          },
+          "kind": "run",
+          "lineage": {
+            "attempt": "1",
+            "run_id": "45967766970",
+            "salt": null,
+            "workflow_sha": "259a98baab796f39d2cc9eacd8a7817307ba0201"
+          },
+          "lock": {
+            "mode": "not-applicable",
+            "sha256": null
+          },
+          "repetition": 1,
+          "rules": {
+            "sha": null
+          },
+          "scenario": "clean",
+          "schema": 1,
+          "timings": {
+            "command_seconds": 83.397,
+            "stock_pub_seconds": 9.331,
+            "unit": "seconds",
+            "validated_result_seconds": 83.397
+          },
+          "validated_at_epoch": 1795769316.7015975
+        },
+        "provider_seconds": 160.0,
+        "restore": {
+          "identity": {
+            "fixture_sha": "0e1484478b62b527d26a83a52d6898504443dbb6",
+            "head_sha": "259a98baab796f39d2cc9eacd8a7817307ba0201",
+            "run_attempt": "1",
+            "run_id": "45967766970",
+            "sdk_version": "3.47.3"
+          },
+          "payload": {
+            "bytes": 1921911578,
+            "file": "seed.tar.zst",
+            "sha256": "8a7513c5cfabfebd87db50962ce26421d0d65f112122a5091d42f72e8c18edb3"
+          },
+          "restore_wall_seconds": 17.401342
+        },
+        "status": "completed",
+        "validated_result_seconds": 150.7015974521637
+      },
+      {
+        "conclusion": "success",
+        "job_id": 140401956150,
+        "job_ids": [
+          140401956150
+        ],
+        "name": "Test timing / stock / clean / 2",
+        "proof": {
+          "cache": {
+            "mode": "read",
+            "read_only": true,
+            "seed_identity": null,
+            "seed_kind": "stock-dependency",
+            "seed_sha256": "8a7513c5cfabfebd87db50962ce26421d0d65f112122a5091d42f72e8c18edb3",
+            "test_result_hits": 0,
+            "test_result_misses": 0
+          },
+          "cases": {
+            "expected": 246,
+            "inventory_sha256": "6474e0e20dcb121f263be7291604e97a724b05a0afe39e9bcfced835ed627c40",
+            "observed": 246
+          },
+          "controls": {
+            "cases": 0,
+            "lock_mode": null,
+            "lock_sha256": null,
+            "rejections": 0,
+            "results": [],
+            "status": "not-run"
+          },
+          "driver": {
+            "kernel_executions": 0,
+            "name": "flutter",
+            "worker_spawns": 0,
+            "worker_strategy": null
+          },
+          "engine": "stock",
+          "fixture": {
+            "sha": "0e1484478b62b527d26a83a52d6898504443dbb6"
+          },
+          "kind": "run",
+          "lineage": {
+            "attempt": "1",
+            "run_id": "45967766970",
+            "salt": null,
+            "workflow_sha": "259a98baab796f39d2cc9eacd8a7817307ba0201"
+          },
+          "lock": {
+            "mode": "not-applicable",
+            "sha256": null
+          },
+          "repetition": 2,
+          "rules": {
+            "sha": null
+          },
+          "scenario": "clean",
+          "schema": 1,
+          "timings": {
+            "command_seconds": 118.305,
+            "stock_pub_seconds": 13.415,
+            "unit": "seconds",
+            "validated_result_seconds": 118.305
+          },
+          "validated_at_epoch": 1795769344.1629581
+        },
+        "provider_seconds": 183.0,
+        "restore": {
+          "identity": {
+            "fixture_sha": "0e1484478b62b527d26a83a52d6898504443dbb6",
+            "head_sha": "259a98baab796f39d2cc9eacd8a7817307ba0201",
+            "run_attempt": "1",
+            "run_id": "45967766970",
+            "sdk_version": "3.47.3"
+          },
+          "payload": {
+            "bytes": 1921911578,
+            "file": "seed.tar.zst",
+            "sha256": "8a7513c5cfabfebd87db50962ce26421d0d65f112122a5091d42f72e8c18edb3"
+          },
+          "restore_wall_seconds": 20.349984
+        },
+        "status": "completed",
+        "validated_result_seconds": 179.1629581451416
+      },
+      {
+        "conclusion": "success",
+        "job_id": 140401956162,
+        "job_ids": [
+          140401956162
+        ],
+        "name": "Test timing / stock / clean / 3",
+        "proof": {
+          "cache": {
+            "mode": "read",
+            "read_only": true,
+            "seed_identity": null,
+            "seed_kind": "stock-dependency",
+            "seed_sha256": "8a7513c5cfabfebd87db50962ce26421d0d65f112122a5091d42f72e8c18edb3",
+            "test_result_hits": 0,
+            "test_result_misses": 0
+          },
+          "cases": {
+            "expected": 246,
+            "inventory_sha256": "6474e0e20dcb121f263be7291604e97a724b05a0afe39e9bcfced835ed627c40",
+            "observed": 246
+          },
+          "controls": {
+            "cases": 0,
+            "lock_mode": null,
+            "lock_sha256": null,
+            "rejections": 0,
+            "results": [],
+            "status": "not-run"
+          },
+          "driver": {
+            "kernel_executions": 0,
+            "name": "flutter",
+            "worker_spawns": 0,
+            "worker_strategy": null
+          },
+          "engine": "stock",
+          "fixture": {
+            "sha": "0e1484478b62b527d26a83a52d6898504443dbb6"
+          },
+          "kind": "run",
+          "lineage": {
+            "attempt": "1",
+            "run_id": "45967766970",
+            "salt": null,
+            "workflow_sha": "259a98baab796f39d2cc9eacd8a7817307ba0201"
+          },
+          "lock": {
+            "mode": "not-applicable",
+            "sha256": null
+          },
+          "repetition": 3,
+          "rules": {
+            "sha": null
+          },
+          "scenario": "clean",
+          "schema": 1,
+          "timings": {
+            "command_seconds": 82.102,
+            "stock_pub_seconds": 8.872,
+            "unit": "seconds",
+            "validated_result_seconds": 82.102
+          },
+          "validated_at_epoch": 1795769300.1085758
+        },
+        "provider_seconds": 136.0,
+        "restore": {
+          "identity": {
+            "fixture_sha": "0e1484478b62b527d26a83a52d6898504443dbb6",
+            "head_sha": "259a98baab796f39d2cc9eacd8a7817307ba0201",
+            "run_attempt": "1",
+            "run_id": "45967766970",
+            "sdk_version": "3.47.3"
+          },
+          "payload": {
+            "bytes": 1921911578,
+            "file": "seed.tar.zst",
+            "sha256": "8a7513c5cfabfebd87db50962ce26421d0d65f112122a5091d42f72e8c18edb3"
+          },
+          "restore_wall_seconds": 13.530656
+        },
+        "status": "completed",
+        "validated_result_seconds": 134.10857582092285
+      },
+      {
+        "conclusion": "success",
+        "job_id": 140400979818,
+        "job_ids": [
+          140400979818
+        ],
+        "name": "Test seed / bazel / cold / 1",
+        "proof": {
+          "cache": {
+            "mode": "seed",
+            "read_only": false,
+            "seed_identity": {
+              "attempt": "1",
+              "repetition": 1,
+              "run_id": "45967766970",
+              "salt": "host-test/45967766970/1/259a98baab796f39d2cc9eacd8a7817307ba0201/1",
+              "workflow_sha": "259a98baab796f39d2cc9eacd8a7817307ba0201"
+            },
+            "seed_kind": "bazel-test",
+            "seed_sha256": "66b848375328591a9084bd226306fba20fd4ab5857fd4171f7c30fbeba33f19f",
+            "test_result_hits": 0,
+            "test_result_misses": 23
+          },
+          "cases": {
+            "expected": 246,
+            "inventory_sha256": "6474e0e20dcb121f263be7291604e97a724b05a0afe39e9bcfced835ed627c40",
+            "observed": 246
+          },
+          "controls": {
+            "cases": 2,
+            "lock_mode": "error",
+            "lock_sha256": "3b8ad5335476becf487b9ef68ef006692957fb42659ed1590912212232bc9a67",
+            "rejections": 2,
+            "results": [
+              {
+                "case": "removeCharacterAt tests Position 0",
+                "name": "corrupted-assertion",
+                "rejected": true
+              },
+              {
+                "case": "removeEmptySpaces tests String with spaces at the beginning",
+                "name": "identity-remove-spaces",
+                "rejected": true
+              }
+            ],
+            "status": "pass"
+          },
+          "driver": {
+            "kernel_executions": 23,
+            "name": "default",
+            "worker_spawns": 23,
+            "worker_strategy": "default"
+          },
+          "engine": "bazel",
+          "fixture": {
+            "sha": "0e1484478b62b527d26a83a52d6898504443dbb6"
+          },
+          "kind": "run",
+          "lineage": {
+            "attempt": "1",
+            "run_id": "45967766970",
+            "salt": "host-test/45967766970/1/259a98baab796f39d2cc9eacd8a7817307ba0201/1",
+            "workflow_sha": "259a98baab796f39d2cc9eacd8a7817307ba0201"
+          },
+          "lock": {
+            "mode": "update",
+            "sha256": "3b8ad5335476becf487b9ef68ef006692957fb42659ed1590912212232bc9a67"
+          },
+          "repetition": 1,
+          "rules": {
+            "sha": "55c8a63efaf853e73e9d61306ba17cf6974ae8ec"
+          },
+          "scenario": "cold",
+          "schema": 1,
+          "timings": {
+            "command_seconds": 122.716,
+            "stock_pub_seconds": 17.654,
+            "unit": "seconds",
+            "validated_result_seconds": 122.716
+          },
+          "validated_at_epoch": 1795769237.1107283
+        },
+        "provider_seconds": 223.0,
+        "status": "completed",
+        "validated_result_seconds": 203.11072826385498
+      },
+      {
+        "conclusion": "success",
+        "job_id": 140400979921,
+        "job_ids": [
+          140400979921
+        ],
+        "name": "Test seed / bazel / cold / 2",
+        "proof": {
+          "cache": {
+            "mode": "seed",
+            "read_only": false,
+            "seed_identity": {
+              "attempt": "1",
+              "repetition": 2,
+              "run_id": "45967766970",
+              "salt": "host-test/45967766970/1/259a98baab796f39d2cc9eacd8a7817307ba0201/2",
+              "workflow_sha": "259a98baab796f39d2cc9eacd8a7817307ba0201"
+            },
+            "seed_kind": "bazel-test",
+            "seed_sha256": "aa9bf77c47902e446c63339108f43dbe1d1d36530d21a9ef5e688ad4f74214b9",
+            "test_result_hits": 0,
+            "test_result_misses": 23
+          },
+          "cases": {
+            "expected": 246,
+            "inventory_sha256": "6474e0e20dcb121f263be7291604e97a724b05a0afe39e9bcfced835ed627c40",
+            "observed": 246
+          },
+          "controls": {
+            "cases": 0,
+            "lock_mode": null,
+            "lock_sha256": null,
+            "rejections": 0,
+            "results": [],
+            "status": "not-run"
+          },
+          "driver": {
+            "kernel_executions": 23,
+            "name": "default",
+            "worker_spawns": 23,
+            "worker_strategy": "default"
+          },
+          "engine": "bazel",
+          "fixture": {
+            "sha": "0e1484478b62b527d26a83a52d6898504443dbb6"
+          },
+          "kind": "run",
+          "lineage": {
+            "attempt": "1",
+            "run_id": "45967766970",
+            "salt": "host-test/45967766970/1/259a98baab796f39d2cc9eacd8a7817307ba0201/2",
+            "workflow_sha": "259a98baab796f39d2cc9eacd8a7817307ba0201"
+          },
+          "lock": {
+            "mode": "update",
+            "sha256": "3b8ad5335476becf487b9ef68ef006692957fb42659ed1590912212232bc9a67"
+          },
+          "repetition": 2,
+          "rules": {
+            "sha": "55c8a63efaf853e73e9d61306ba17cf6974ae8ec"
+          },
+          "scenario": "cold",
+          "schema": 1,
+          "timings": {
+            "command_seconds": 124.623,
+            "stock_pub_seconds": 17.616,
+            "unit": "seconds",
+            "validated_result_seconds": 124.623
+          },
+          "validated_at_epoch": 1795769228.888864
+        },
+        "provider_seconds": 204.0,
+        "status": "completed",
+        "validated_result_seconds": 199.88886404037476
+      },
+      {
+        "conclusion": "success",
+        "job_id": 140400979911,
+        "job_ids": [
+          140400979911
+        ],
+        "name": "Test seed / bazel / cold / 3",
+        "proof": {
+          "cache": {
+            "mode": "seed",
+            "read_only": false,
+            "seed_identity": {
+              "attempt": "1",
+              "repetition": 3,
+              "run_id": "45967766970",
+              "salt": "host-test/45967766970/1/259a98baab796f39d2cc9eacd8a7817307ba0201/3",
+              "workflow_sha": "259a98baab796f39d2cc9eacd8a7817307ba0201"
+            },
+            "seed_kind": "bazel-test",
+            "seed_sha256": "6358a3a5648ec546008e023fb73135ba0690d7f9996351c2907e49d761ad8170",
+            "test_result_hits": 0,
+            "test_result_misses": 23
+          },
+          "cases": {
+            "expected": 246,
+            "inventory_sha256": "6474e0e20dcb121f263be7291604e97a724b05a0afe39e9bcfced835ed627c40",
+            "observed": 246
+          },
+          "controls": {
+            "cases": 0,
+            "lock_mode": null,
+            "lock_sha256": null,
+            "rejections": 0,
+            "results": [],
+            "status": "not-run"
+          },
+          "driver": {
+            "kernel_executions": 23,
+            "name": "default",
+            "worker_spawns": 23,
+            "worker_strategy": "default"
+          },
+          "engine": "bazel",
+          "fixture": {
+            "sha": "0e1484478b62b527d26a83a52d6898504443dbb6"
+          },
+          "kind": "run",
+          "lineage": {
+            "attempt": "1",
+            "run_id": "45967766970",
+            "salt": "host-test/45967766970/1/259a98baab796f39d2cc9eacd8a7817307ba0201/3",
+            "workflow_sha": "259a98baab796f39d2cc9eacd8a7817307ba0201"
+          },
+          "lock": {
+            "mode": "update",
+            "sha256": "3b8ad5335476becf487b9ef68ef006692957fb42659ed1590912212232bc9a67"
+          },
+          "repetition": 3,
+          "rules": {
+            "sha": "55c8a63efaf853e73e9d61306ba17cf6974ae8ec"
+          },
+          "scenario": "cold",
+          "schema": 1,
+          "timings": {
+            "command_seconds": 238.168,
+            "stock_pub_seconds": 23.588,
+            "unit": "seconds",
+            "validated_result_seconds": 238.168
+          },
+          "validated_at_epoch": 1795769347.1141903
+        },
+        "provider_seconds": 332.0,
+        "status": "completed",
+        "validated_result_seconds": 318.1141903400421
+      },
+      {
+        "conclusion": "success",
+        "job_id": 140403363123,
+        "job_ids": [
+          140403363123
+        ],
+        "name": "Test timing / bazel / warm / 1",
+        "proof": {
+          "cache": {
+            "mode": "read",
+            "read_only": true,
+            "seed_identity": {
+              "attempt": "1",
+              "repetition": 1,
+              "run_id": "45967766970",
+              "salt": "host-test/45967766970/1/259a98baab796f39d2cc9eacd8a7817307ba0201/1",
+              "workflow_sha": "259a98baab796f39d2cc9eacd8a7817307ba0201"
+            },
+            "seed_kind": "bazel-test",
+            "seed_sha256": "66b848375328591a9084bd226306fba20fd4ab5857fd4171f7c30fbeba33f19f",
+            "test_result_hits": 23,
+            "test_result_misses": 0
+          },
+          "cases": {
+            "expected": 246,
+            "inventory_sha256": "6474e0e20dcb121f263be7291604e97a724b05a0afe39e9bcfced835ed627c40",
+            "observed": 246
+          },
+          "controls": {
+            "cases": 0,
+            "lock_mode": null,
+            "lock_sha256": null,
+            "rejections": 0,
+            "results": [],
+            "status": "not-run"
+          },
+          "driver": {
+            "kernel_executions": 0,
+            "name": "default",
+            "worker_spawns": 0,
+            "worker_strategy": null
+          },
+          "engine": "bazel",
+          "fixture": {
+            "sha": "0e1484478b62b527d26a83a52d6898504443dbb6"
+          },
+          "kind": "run",
+          "lineage": {
+            "attempt": "1",
+            "run_id": "45967766970",
+            "salt": "host-test/45967766970/1/259a98baab796f39d2cc9eacd8a7817307ba0201/1",
+            "workflow_sha": "259a98baab796f39d2cc9eacd8a7817307ba0201"
+          },
+          "lock": {
+            "mode": "update",
+            "sha256": "3b8ad5335476becf487b9ef68ef006692957fb42659ed1590912212232bc9a67"
+          },
+          "repetition": 1,
+          "rules": {
+            "sha": "55c8a63efaf853e73e9d61306ba17cf6974ae8ec"
+          },
+          "scenario": "warm",
+          "schema": 1,
+          "timings": {
+            "command_seconds": 89.886,
+            "stock_pub_seconds": 19.255,
+            "unit": "seconds",
+            "validated_result_seconds": 89.886
+          },
+          "validated_at_epoch": 1795769541.2836144
+        },
+        "provider_seconds": 182.0,
+        "status": "completed",
+        "validated_result_seconds": 177.28361439704895
+      },
+      {
+        "conclusion": "success",
+        "job_id": 140403362947,
+        "job_ids": [
+          140403362947
+        ],
+        "name": "Test timing / bazel / warm / 2",
+        "proof": {
+          "cache": {
+            "mode": "read",
+            "read_only": true,
+            "seed_identity": {
+              "attempt": "1",
+              "repetition": 2,
+              "run_id": "45967766970",
+              "salt": "host-test/45967766970/1/259a98baab796f39d2cc9eacd8a7817307ba0201/2",
+              "workflow_sha": "259a98baab796f39d2cc9eacd8a7817307ba0201"
+            },
+            "seed_kind": "bazel-test",
+            "seed_sha256": "aa9bf77c47902e446c63339108f43dbe1d1d36530d21a9ef5e688ad4f74214b9",
+            "test_result_hits": 23,
+            "test_result_misses": 0
+          },
+          "cases": {
+            "expected": 246,
+            "inventory_sha256": "6474e0e20dcb121f263be7291604e97a724b05a0afe39e9bcfced835ed627c40",
+            "observed": 246
+          },
+          "controls": {
+            "cases": 0,
+            "lock_mode": null,
+            "lock_sha256": null,
+            "rejections": 0,
+            "results": [],
+            "status": "not-run"
+          },
+          "driver": {
+            "kernel_executions": 0,
+            "name": "default",
+            "worker_spawns": 0,
+            "worker_strategy": null
+          },
+          "engine": "bazel",
+          "fixture": {
+            "sha": "0e1484478b62b527d26a83a52d6898504443dbb6"
+          },
+          "kind": "run",
+          "lineage": {
+            "attempt": "1",
+            "run_id": "45967766970",
+            "salt": "host-test/45967766970/1/259a98baab796f39d2cc9eacd8a7817307ba0201/2",
+            "workflow_sha": "259a98baab796f39d2cc9eacd8a7817307ba0201"
+          },
+          "lock": {
+            "mode": "update",
+            "sha256": "3b8ad5335476becf487b9ef68ef006692957fb42659ed1590912212232bc9a67"
+          },
+          "repetition": 2,
+          "rules": {
+            "sha": "55c8a63efaf853e73e9d61306ba17cf6974ae8ec"
+          },
+          "scenario": "warm",
+          "schema": 1,
+          "timings": {
+            "command_seconds": 80.299,
+            "stock_pub_seconds": 23.643,
+            "unit": "seconds",
+            "validated_result_seconds": 80.299
+          },
+          "validated_at_epoch": 1795769526.185017
+        },
+        "provider_seconds": 178.0,
+        "status": "completed",
+        "validated_result_seconds": 162.18501710891724
+      },
+      {
+        "conclusion": "success",
+        "job_id": 140403363013,
+        "job_ids": [
+          140403363013
+        ],
+        "name": "Test timing / bazel / warm / 3",
+        "proof": {
+          "cache": {
+            "mode": "read",
+            "read_only": true,
+            "seed_identity": {
+              "attempt": "1",
+              "repetition": 3,
+              "run_id": "45967766970",
+              "salt": "host-test/45967766970/1/259a98baab796f39d2cc9eacd8a7817307ba0201/3",
+              "workflow_sha": "259a98baab796f39d2cc9eacd8a7817307ba0201"
+            },
+            "seed_kind": "bazel-test",
+            "seed_sha256": "6358a3a5648ec546008e023fb73135ba0690d7f9996351c2907e49d761ad8170",
+            "test_result_hits": 23,
+            "test_result_misses": 0
+          },
+          "cases": {
+            "expected": 246,
+            "inventory_sha256": "6474e0e20dcb121f263be7291604e97a724b05a0afe39e9bcfced835ed627c40",
+            "observed": 246
+          },
+          "controls": {
+            "cases": 0,
+            "lock_mode": null,
+            "lock_sha256": null,
+            "rejections": 0,
+            "results": [],
+            "status": "not-run"
+          },
+          "driver": {
+            "kernel_executions": 0,
+            "name": "default",
+            "worker_spawns": 0,
+            "worker_strategy": null
+          },
+          "engine": "bazel",
+          "fixture": {
+            "sha": "0e1484478b62b527d26a83a52d6898504443dbb6"
+          },
+          "kind": "run",
+          "lineage": {
+            "attempt": "1",
+            "run_id": "45967766970",
+            "salt": "host-test/45967766970/1/259a98baab796f39d2cc9eacd8a7817307ba0201/3",
+            "workflow_sha": "259a98baab796f39d2cc9eacd8a7817307ba0201"
+          },
+          "lock": {
+            "mode": "update",
+            "sha256": "3b8ad5335476becf487b9ef68ef006692957fb42659ed1590912212232bc9a67"
+          },
+          "repetition": 3,
+          "rules": {
+            "sha": "55c8a63efaf853e73e9d61306ba17cf6974ae8ec"
+          },
+          "scenario": "warm",
+          "schema": 1,
+          "timings": {
+            "command_seconds": 69.229,
+            "stock_pub_seconds": 19.543,
+            "unit": "seconds",
+            "validated_result_seconds": 69.229
+          },
+          "validated_at_epoch": 1795769518.0223696
+        },
+        "provider_seconds": 159.0,
+        "status": "completed",
+        "validated_result_seconds": 154.0223696231842
+      },
+      {
+        "conclusion": "success",
+        "job_id": 140403363465,
+        "job_ids": [
+          140403363465
+        ],
+        "name": "Test timing / bazel / test / 1",
+        "proof": {
+          "cache": {
+            "mode": "read",
+            "read_only": true,
+            "seed_identity": {
+              "attempt": "1",
+              "repetition": 1,
+              "run_id": "45967766970",
+              "salt": "host-test/45967766970/1/259a98baab796f39d2cc9eacd8a7817307ba0201/1",
+              "workflow_sha": "259a98baab796f39d2cc9eacd8a7817307ba0201"
+            },
+            "seed_kind": "bazel-test",
+            "seed_sha256": "66b848375328591a9084bd226306fba20fd4ab5857fd4171f7c30fbeba33f19f",
+            "test_result_hits": 22,
+            "test_result_misses": 1
+          },
+          "cases": {
+            "expected": 246,
+            "inventory_sha256": "88a4e945e49827f95182431b1adcb329e4a9e176bfffa3a17a8839b94dc38195",
+            "observed": 246
+          },
+          "controls": {
+            "cases": 0,
+            "lock_mode": null,
+            "lock_sha256": null,
+            "rejections": 0,
+            "results": [],
+            "status": "not-run"
+          },
+          "driver": {
+            "kernel_executions": 16,
+            "name": "default",
+            "worker_spawns": 16,
+            "worker_strategy": "default"
+          },
+          "engine": "bazel",
+          "fixture": {
+            "sha": "0e1484478b62b527d26a83a52d6898504443dbb6"
+          },
+          "kind": "run",
+          "lineage": {
+            "attempt": "1",
+            "run_id": "45967766970",
+            "salt": "host-test/45967766970/1/259a98baab796f39d2cc9eacd8a7817307ba0201/1",
+            "workflow_sha": "259a98baab796f39d2cc9eacd8a7817307ba0201"
+          },
+          "lock": {
+            "mode": "update",
+            "sha256": "3b8ad5335476becf487b9ef68ef006692957fb42659ed1590912212232bc9a67"
+          },
+          "repetition": 1,
+          "rules": {
+            "sha": "55c8a63efaf853e73e9d61306ba17cf6974ae8ec"
+          },
+          "scenario": "test",
+          "schema": 1,
+          "timings": {
+            "command_seconds": 75.129,
+            "stock_pub_seconds": 19.543,
+            "unit": "seconds",
+            "validated_result_seconds": 75.129
+          },
+          "validated_at_epoch": 1795769518.4045992
+        },
+        "provider_seconds": 157.0,
+        "status": "completed",
+        "validated_result_seconds": 154.4045991897583
+      },
+      {
+        "conclusion": "success",
+        "job_id": 140403363031,
+        "job_ids": [
+          140403363031
+        ],
+        "name": "Test timing / bazel / test / 2",
+        "proof": {
+          "cache": {
+            "mode": "read",
+            "read_only": true,
+            "seed_identity": {
+              "attempt": "1",
+              "repetition": 2,
+              "run_id": "45967766970",
+              "salt": "host-test/45967766970/1/259a98baab796f39d2cc9eacd8a7817307ba0201/2",
+              "workflow_sha": "259a98baab796f39d2cc9eacd8a7817307ba0201"
+            },
+            "seed_kind": "bazel-test",
+            "seed_sha256": "aa9bf77c47902e446c63339108f43dbe1d1d36530d21a9ef5e688ad4f74214b9",
+            "test_result_hits": 22,
+            "test_result_misses": 1
+          },
+          "cases": {
+            "expected": 246,
+            "inventory_sha256": "88a4e945e49827f95182431b1adcb329e4a9e176bfffa3a17a8839b94dc38195",
+            "observed": 246
+          },
+          "controls": {
+            "cases": 0,
+            "lock_mode": null,
+            "lock_sha256": null,
+            "rejections": 0,
+            "results": [],
+            "status": "not-run"
+          },
+          "driver": {
+            "kernel_executions": 16,
+            "name": "default",
+            "worker_spawns": 16,
+            "worker_strategy": "default"
+          },
+          "engine": "bazel",
+          "fixture": {
+            "sha": "0e1484478b62b527d26a83a52d6898504443dbb6"
+          },
+          "kind": "run",
+          "lineage": {
+            "attempt": "1",
+            "run_id": "45967766970",
+            "salt": "host-test/45967766970/1/259a98baab796f39d2cc9eacd8a7817307ba0201/2",
+            "workflow_sha": "259a98baab796f39d2cc9eacd8a7817307ba0201"
+          },
+          "lock": {
+            "mode": "update",
+            "sha256": "3b8ad5335476becf487b9ef68ef006692957fb42659ed1590912212232bc9a67"
+          },
+          "repetition": 2,
+          "rules": {
+            "sha": "55c8a63efaf853e73e9d61306ba17cf6974ae8ec"
+          },
+          "scenario": "test",
+          "schema": 1,
+          "timings": {
+            "command_seconds": 120.929,
+            "stock_pub_seconds": 29.164,
+            "unit": "seconds",
+            "validated_result_seconds": 120.929
+          },
+          "validated_at_epoch": 1795769592.141336
+        },
+        "provider_seconds": 244.0,
+        "status": "completed",
+        "validated_result_seconds": 228.14133596420288
+      },
+      {
+        "conclusion": "success",
+        "job_id": 140403362921,
+        "job_ids": [
+          140403362921
+        ],
+        "name": "Test timing / bazel / test / 3",
+        "proof": {
+          "cache": {
+            "mode": "read",
+            "read_only": true,
+            "seed_identity": {
+              "attempt": "1",
+              "repetition": 3,
+              "run_id": "45967766970",
+              "salt": "host-test/45967766970/1/259a98baab796f39d2cc9eacd8a7817307ba0201/3",
+              "workflow_sha": "259a98baab796f39d2cc9eacd8a7817307ba0201"
+            },
+            "seed_kind": "bazel-test",
+            "seed_sha256": "6358a3a5648ec546008e023fb73135ba0690d7f9996351c2907e49d761ad8170",
+            "test_result_hits": 22,
+            "test_result_misses": 1
+          },
+          "cases": {
+            "expected": 246,
+            "inventory_sha256": "88a4e945e49827f95182431b1adcb329e4a9e176bfffa3a17a8839b94dc38195",
+            "observed": 246
+          },
+          "controls": {
+            "cases": 0,
+            "lock_mode": null,
+            "lock_sha256": null,
+            "rejections": 0,
+            "results": [],
+            "status": "not-run"
+          },
+          "driver": {
+            "kernel_executions": 16,
+            "name": "default",
+            "worker_spawns": 16,
+            "worker_strategy": "default"
+          },
+          "engine": "bazel",
+          "fixture": {
+            "sha": "0e1484478b62b527d26a83a52d6898504443dbb6"
+          },
+          "kind": "run",
+          "lineage": {
+            "attempt": "1",
+            "run_id": "45967766970",
+            "salt": "host-test/45967766970/1/259a98baab796f39d2cc9eacd8a7817307ba0201/3",
+            "workflow_sha": "259a98baab796f39d2cc9eacd8a7817307ba0201"
+          },
+          "lock": {
+            "mode": "update",
+            "sha256": "3b8ad5335476becf487b9ef68ef006692957fb42659ed1590912212232bc9a67"
+          },
+          "repetition": 3,
+          "rules": {
+            "sha": "55c8a63efaf853e73e9d61306ba17cf6974ae8ec"
+          },
+          "scenario": "test",
+          "schema": 1,
+          "timings": {
+            "command_seconds": 108.376,
+            "stock_pub_seconds": 31.428,
+            "unit": "seconds",
+            "validated_result_seconds": 108.376
+          },
+          "validated_at_epoch": 1795769577.2511733
+        },
+        "provider_seconds": 223.0,
+        "status": "completed",
+        "validated_result_seconds": 213.25117325782776
+      },
+      {
+        "conclusion": "success",
+        "job_id": 140403362980,
+        "job_ids": [
+          140403362980
+        ],
+        "name": "Test timing / bazel / lib / 1",
+        "proof": {
+          "cache": {
+            "mode": "read",
+            "read_only": true,
+            "seed_identity": {
+              "attempt": "1",
+              "repetition": 1,
+              "run_id": "45967766970",
+              "salt": "host-test/45967766970/1/259a98baab796f39d2cc9eacd8a7817307ba0201/1",
+              "workflow_sha": "259a98baab796f39d2cc9eacd8a7817307ba0201"
+            },
+            "seed_kind": "bazel-test",
+            "seed_sha256": "66b848375328591a9084bd226306fba20fd4ab5857fd4171f7c30fbeba33f19f",
+            "test_result_hits": 7,
+            "test_result_misses": 16
+          },
+          "cases": {
+            "expected": 246,
+            "inventory_sha256": "6474e0e20dcb121f263be7291604e97a724b05a0afe39e9bcfced835ed627c40",
+            "observed": 246
+          },
+          "controls": {
+            "cases": 0,
+            "lock_mode": null,
+            "lock_sha256": null,
+            "rejections": 0,
+            "results": [],
+            "status": "not-run"
+          },
+          "driver": {
+            "kernel_executions": 16,
+            "name": "default",
+            "worker_spawns": 16,
+            "worker_strategy": "default"
+          },
+          "engine": "bazel",
+          "fixture": {
+            "sha": "0e1484478b62b527d26a83a52d6898504443dbb6"
+          },
+          "kind": "run",
+          "lineage": {
+            "attempt": "1",
+            "run_id": "45967766970",
+            "salt": "host-test/45967766970/1/259a98baab796f39d2cc9eacd8a7817307ba0201/1",
+            "workflow_sha": "259a98baab796f39d2cc9eacd8a7817307ba0201"
+          },
+          "lock": {
+            "mode": "update",
+            "sha256": "3b8ad5335476becf487b9ef68ef006692957fb42659ed1590912212232bc9a67"
+          },
+          "repetition": 1,
+          "rules": {
+            "sha": "55c8a63efaf853e73e9d61306ba17cf6974ae8ec"
+          },
+          "scenario": "lib",
+          "schema": 1,
+          "timings": {
+            "command_seconds": 105.219,
+            "stock_pub_seconds": 28.637,
+            "unit": "seconds",
+            "validated_result_seconds": 105.219
+          },
+          "validated_at_epoch": 1795769571.0122638
+        },
+        "provider_seconds": 219.0,
+        "status": "completed",
+        "validated_result_seconds": 207.01226377487183
+      },
+      {
+        "conclusion": "success",
+        "job_id": 140403362954,
+        "job_ids": [
+          140403362954
+        ],
+        "name": "Test timing / bazel / lib / 2",
+        "proof": {
+          "cache": {
+            "mode": "read",
+            "read_only": true,
+            "seed_identity": {
+              "attempt": "1",
+              "repetition": 2,
+              "run_id": "45967766970",
+              "salt": "host-test/45967766970/1/259a98baab796f39d2cc9eacd8a7817307ba0201/2",
+              "workflow_sha": "259a98baab796f39d2cc9eacd8a7817307ba0201"
+            },
+            "seed_kind": "bazel-test",
+            "seed_sha256": "aa9bf77c47902e446c63339108f43dbe1d1d36530d21a9ef5e688ad4f74214b9",
+            "test_result_hits": 7,
+            "test_result_misses": 16
+          },
+          "cases": {
+            "expected": 246,
+            "inventory_sha256": "6474e0e20dcb121f263be7291604e97a724b05a0afe39e9bcfced835ed627c40",
+            "observed": 246
+          },
+          "controls": {
+            "cases": 0,
+            "lock_mode": null,
+            "lock_sha256": null,
+            "rejections": 0,
+            "results": [],
+            "status": "not-run"
+          },
+          "driver": {
+            "kernel_executions": 16,
+            "name": "default",
+            "worker_spawns": 16,
+            "worker_strategy": "default"
+          },
+          "engine": "bazel",
+          "fixture": {
+            "sha": "0e1484478b62b527d26a83a52d6898504443dbb6"
+          },
+          "kind": "run",
+          "lineage": {
+            "attempt": "1",
+            "run_id": "45967766970",
+            "salt": "host-test/45967766970/1/259a98baab796f39d2cc9eacd8a7817307ba0201/2",
+            "workflow_sha": "259a98baab796f39d2cc9eacd8a7817307ba0201"
+          },
+          "lock": {
+            "mode": "update",
+            "sha256": "3b8ad5335476becf487b9ef68ef006692957fb42659ed1590912212232bc9a67"
+          },
+          "repetition": 2,
+          "rules": {
+            "sha": "55c8a63efaf853e73e9d61306ba17cf6974ae8ec"
+          },
+          "scenario": "lib",
+          "schema": 1,
+          "timings": {
+            "command_seconds": 101.327,
+            "stock_pub_seconds": 19.176,
+            "unit": "seconds",
+            "validated_result_seconds": 101.327
+          },
+          "validated_at_epoch": 1795769548.2740066
+        },
+        "provider_seconds": 189.0,
+        "status": "completed",
+        "validated_result_seconds": 184.27400660514832
+      },
+      {
+        "conclusion": "success",
+        "job_id": 140403362923,
+        "job_ids": [
+          140403362923
+        ],
+        "name": "Test timing / bazel / lib / 3",
+        "proof": {
+          "cache": {
+            "mode": "read",
+            "read_only": true,
+            "seed_identity": {
+              "attempt": "1",
+              "repetition": 3,
+              "run_id": "45967766970",
+              "salt": "host-test/45967766970/1/259a98baab796f39d2cc9eacd8a7817307ba0201/3",
+              "workflow_sha": "259a98baab796f39d2cc9eacd8a7817307ba0201"
+            },
+            "seed_kind": "bazel-test",
+            "seed_sha256": "6358a3a5648ec546008e023fb73135ba0690d7f9996351c2907e49d761ad8170",
+            "test_result_hits": 7,
+            "test_result_misses": 16
+          },
+          "cases": {
+            "expected": 246,
+            "inventory_sha256": "6474e0e20dcb121f263be7291604e97a724b05a0afe39e9bcfced835ed627c40",
+            "observed": 246
+          },
+          "controls": {
+            "cases": 0,
+            "lock_mode": null,
+            "lock_sha256": null,
+            "rejections": 0,
+            "results": [],
+            "status": "not-run"
+          },
+          "driver": {
+            "kernel_executions": 16,
+            "name": "default",
+            "worker_spawns": 16,
+            "worker_strategy": "default"
+          },
+          "engine": "bazel",
+          "fixture": {
+            "sha": "0e1484478b62b527d26a83a52d6898504443dbb6"
+          },
+          "kind": "run",
+          "lineage": {
+            "attempt": "1",
+            "run_id": "45967766970",
+            "salt": "host-test/45967766970/1/259a98baab796f39d2cc9eacd8a7817307ba0201/3",
+            "workflow_sha": "259a98baab796f39d2cc9eacd8a7817307ba0201"
+          },
+          "lock": {
+            "mode": "update",
+            "sha256": "3b8ad5335476becf487b9ef68ef006692957fb42659ed1590912212232bc9a67"
+          },
+          "repetition": 3,
+          "rules": {
+            "sha": "55c8a63efaf853e73e9d61306ba17cf6974ae8ec"
+          },
+          "scenario": "lib",
+          "schema": 1,
+          "timings": {
+            "command_seconds": 97.486,
+            "stock_pub_seconds": 19.584,
+            "unit": "seconds",
+            "validated_result_seconds": 97.486
+          },
+          "validated_at_epoch": 1795769546.7361085
+        },
+        "provider_seconds": 189.0,
+        "status": "completed",
+        "validated_result_seconds": 182.73610854148865
+      }
+    ],
+    "rules_commit": "55c8a63efaf853e73e9d61306ba17cf6974ae8ec",
+    "seed_setup": {
+      "bazel_cold_repeat_1": {
+        "command_seconds": 122.716,
+        "full_job_seconds": 223.0,
+        "validated_result_seconds": 203.11072826385498
+      },
+      "stock_artifact_bytes": 1921911578,
+      "stock_artifact_sha256": "8a7513c5cfabfebd87db50962ce26421d0d65f112122a5091d42f72e8c18edb3",
+      "stock_full_job_seconds": 134.0,
+      "stock_pack_wall_seconds": 8.505819
+    },
+    "valid": true
+  },
+  "issues": [
+    "APK timing / stock / cold / 0 (140402772421): job did not succeed",
+    "APK timing / stock / cold / 1 (140402772499): job did not succeed",
+    "APK timing / stock / cold / 2 (140402772569): job did not succeed",
+    "APK timing / stock / warm / 0: missing or duplicate job",
+    "APK timing / stock / warm / 1: missing or duplicate job",
+    "APK timing / stock / warm / 2: missing or duplicate job",
+    "APK timing / bazel / cold / 0 (140402772487): job did not succeed",
+    "APK timing / bazel / cold / 1 (140402772675): job did not succeed",
+    "APK timing / bazel / cold / 2 (140402772660): job did not succeed",
+    "APK timing / bazel / warm / 0: missing or duplicate job",
+    "APK timing / bazel / warm / 1: missing or duplicate job",
+    "APK timing / bazel / warm / 2: missing or duplicate job",
+    "APK timing / bazel / lib / 0: missing or duplicate job",
+    "APK timing / bazel / lib / 1: missing or duplicate job",
+    "APK timing / bazel / lib / 2: missing or duplicate job",
+    "stock warm APK differs from cold/0",
+    "stock cold/1 is not signature-only variation",
+    "stock cold/2 is not signature-only variation",
+    "bazel APK digests differ across cold/warm rows",
+    "Bazel Dart-edit APK digest gate failed",
+    "app commit provenance is missing or inconsistent"
+  ],
+  "repeats": 3,
+  "rows": [
+    {
+      "conclusion": "failure",
+      "evidence_error": "job did not succeed",
+      "job_id": 140402772421,
+      "job_ids": [
+        140402772421
+      ],
+      "name": "APK timing / stock / cold / 0",
+      "provider_seconds": 590.0,
+      "status": "completed"
+    },
+    {
+      "conclusion": "failure",
+      "evidence_error": "job did not succeed",
+      "job_id": 140402772499,
+      "job_ids": [
+        140402772499
+      ],
+      "name": "APK timing / stock / cold / 1",
+      "provider_seconds": 686.0,
+      "status": "completed"
+    },
+    {
+      "conclusion": "failure",
+      "evidence_error": "job did not succeed",
+      "job_id": 140402772569,
+      "job_ids": [
+        140402772569
+      ],
+      "name": "APK timing / stock / cold / 2",
+      "provider_seconds": 487.0,
+      "status": "completed"
+    },
+    {
+      "evidence_error": "missing or duplicate job",
+      "job_ids": [],
+      "name": "APK timing / stock / warm / 0"
+    },
+    {
+      "evidence_error": "missing or duplicate job",
+      "job_ids": [],
+      "name": "APK timing / stock / warm / 1"
+    },
+    {
+      "evidence_error": "missing or duplicate job",
+      "job_ids": [],
+      "name": "APK timing / stock / warm / 2"
+    },
+    {
+      "conclusion": "failure",
+      "evidence_error": "job did not succeed",
+      "job_id": 140402772487,
+      "job_ids": [
+        140402772487
+      ],
+      "name": "APK timing / bazel / cold / 0",
+      "provider_seconds": 1229.0,
+      "status": "completed"
+    },
+    {
+      "conclusion": "failure",
+      "evidence_error": "job did not succeed",
+      "job_id": 140402772675,
+      "job_ids": [
+        140402772675
+      ],
+      "name": "APK timing / bazel / cold / 1",
+      "provider_seconds": 870.0,
+      "status": "completed"
+    },
+    {
+      "conclusion": "failure",
+      "evidence_error": "job did not succeed",
+      "job_id": 140402772660,
+      "job_ids": [
+        140402772660
+      ],
+      "name": "APK timing / bazel / cold / 2",
+      "provider_seconds": 861.0,
+      "status": "completed"
+    },
+    {
+      "evidence_error": "missing or duplicate job",
+      "job_ids": [],
+      "name": "APK timing / bazel / warm / 0"
+    },
+    {
+      "evidence_error": "missing or duplicate job",
+      "job_ids": [],
+      "name": "APK timing / bazel / warm / 1"
+    },
+    {
+      "evidence_error": "missing or duplicate job",
+      "job_ids": [],
+      "name": "APK timing / bazel / warm / 2"
+    },
+    {
+      "evidence_error": "missing or duplicate job",
+      "job_ids": [],
+      "name": "APK timing / bazel / lib / 0"
+    },
+    {
+      "evidence_error": "missing or duplicate job",
+      "job_ids": [],
+      "name": "APK timing / bazel / lib / 1"
+    },
+    {
+      "evidence_error": "missing or duplicate job",
+      "job_ids": [],
+      "name": "APK timing / bazel / lib / 2"
+    }
+  ],
+  "rules_commit": "55c8a63efaf853e73e9d61306ba17cf6974ae8ec",
+  "run_attempt": 1,
+  "run_id": "45967766970",
+  "runner_class": "ubuntu-24.04 standard public runner",
+  "runner_observations": [
+    {
+      "job": "APK timing / stock / cold / 0",
+      "memory_bytes": null,
+      "vcpus": null
+    },
+    {
+      "job": "APK timing / stock / cold / 1",
+      "memory_bytes": null,
+      "vcpus": null
+    },
+    {
+      "job": "APK timing / stock / cold / 2",
+      "memory_bytes": null,
+      "vcpus": null
+    },
+    {
+      "job": "APK timing / stock / warm / 0",
+      "memory_bytes": null,
+      "vcpus": null
+    },
+    {
+      "job": "APK timing / stock / warm / 1",
+      "memory_bytes": null,
+      "vcpus": null
+    },
+    {
+      "job": "APK timing / stock / warm / 2",
+      "memory_bytes": null,
+      "vcpus": null
+    },
+    {
+      "job": "APK timing / bazel / cold / 0",
+      "memory_bytes": null,
+      "vcpus": null
+    },
+    {
+      "job": "APK timing / bazel / cold / 1",
+      "memory_bytes": null,
+      "vcpus": null
+    },
+    {
+      "job": "APK timing / bazel / cold / 2",
+      "memory_bytes": null,
+      "vcpus": null
+    },
+    {
+      "job": "APK timing / bazel / warm / 0",
+      "memory_bytes": null,
+      "vcpus": null
+    },
+    {
+      "job": "APK timing / bazel / warm / 1",
+      "memory_bytes": null,
+      "vcpus": null
+    },
+    {
+      "job": "APK timing / bazel / warm / 2",
+      "memory_bytes": null,
+      "vcpus": null
+    },
+    {
+      "job": "APK timing / bazel / lib / 0",
+      "memory_bytes": null,
+      "vcpus": null
+    },
+    {
+      "job": "APK timing / bazel / lib / 1",
+      "memory_bytes": null,
+      "vcpus": null
+    },
+    {
+      "job": "APK timing / bazel / lib / 2",
+      "memory_bytes": null,
+      "vcpus": null
+    }
+  ],
+  "seed_cache_proofs": [
+    {
+      "combined_bytes": null,
+      "engine": "stock",
+      "gradle_top_level_directories": []
+    },
+    {
+      "combined_bytes": null,
+      "engine": "bazel",
+      "gradle_top_level_directories": []
+    }
+  ],
+  "suite": "both",
+  "valid": false,
+  "workflow_commit": "259a98baab796f39d2cc9eacd8a7817307ba0201"
+}
