@@ -1,0 +1,646 @@
+{
+  "app_commit": "6e7408fda8e46bc97a0d8f2b33a801cf27c8dabe",
+  "app_ref": "6e7408fda8e46bc97a0d8f2b33a801cf27c8dabe",
+  "comparisons": [
+    {
+      "bazel_critical_path_components_median_seconds": {},
+      "bazel_critical_path_median_seconds": null,
+      "bazel_rows_from": "cold",
+      "full_job_median_seconds": {},
+      "n": 0,
+      "rows_seconds": {
+        "bazel": [
+          null
+        ],
+        "stock": [
+          495.722759
+        ]
+      },
+      "scenario": "cold",
+      "stock_rows_from": "cold",
+      "validated_apk_median_seconds": {},
+      "verdict": "invalid"
+    },
+    {
+      "bazel_critical_path_components_median_seconds": {},
+      "bazel_critical_path_median_seconds": null,
+      "bazel_rows_from": "warm",
+      "full_job_median_seconds": {},
+      "n": 0,
+      "rows_seconds": {
+        "bazel": [
+          null
+        ],
+        "stock": [
+          339.6009
+        ]
+      },
+      "scenario": "warm",
+      "stock_rows_from": "warm",
+      "validated_apk_median_seconds": {},
+      "verdict": "invalid"
+    },
+    {
+      "bazel_critical_path_components_median_seconds": {},
+      "bazel_critical_path_median_seconds": null,
+      "bazel_rows_from": "lib",
+      "full_job_median_seconds": {},
+      "n": 0,
+      "rows_seconds": {
+        "bazel": [
+          null
+        ],
+        "stock": [
+          339.6009
+        ]
+      },
+      "scenario": "edit",
+      "stock_rows_from": "warm",
+      "validated_apk_median_seconds": {},
+      "verdict": "invalid"
+    }
+  ],
+  "cost": {
+    "bazel": {
+      "2_core_proxy_usd": 0.0,
+      "4_core_proxy_usd": 0.0,
+      "jobs": 0,
+      "public_compute_usd": 0,
+      "rounded_job_minutes": 0
+    },
+    "stock": {
+      "2_core_proxy_usd": 0.102,
+      "4_core_proxy_usd": 0.204,
+      "jobs": 2,
+      "public_compute_usd": 0,
+      "rounded_job_minutes": 17
+    }
+  },
+  "issues": [
+    "APK timing / bazel / cold / 0 (140349726787): job did not succeed",
+    "APK timing / bazel / warm / 0: missing or duplicate job",
+    "APK timing / bazel / lib / 0: missing or duplicate job",
+    "bazel APK digests differ across cold/warm rows",
+    "Bazel Dart-edit APK digest gate failed"
+  ],
+  "repeats": 1,
+  "rows": [
+    {
+      "app_commit": "6e7408fda8e46bc97a0d8f2b33a801cf27c8dabe",
+      "artifact": {
+        "badging": {
+          "compileSdk": "36",
+          "debuggable": true,
+          "minSdk": "24",
+          "native_code": [
+            "x86_64"
+          ],
+          "package": "org.openfoodfacts.scanner",
+          "targetSdk": "36",
+          "version_name": "0.0.0"
+        },
+        "byte_identity_gate": false,
+        "bytes": 135292423,
+        "kernel_marker_present": false,
+        "kernel_sha256": "a39fc1778c9ac7202380a233d87b7e77ae07c8070a899243109daca8bf4c1744",
+        "member_count": 964,
+        "native_inventory": [
+          {
+            "bytes": 5909280,
+            "elf_machine": 62,
+            "name": "lib/x86_64/libbarhopper_v3.so",
+            "sha256": "6c5deea87d962af008fd48c3229db13ab68eef2e9feeccb2df5b33a920c0579a"
+          },
+          {
+            "bytes": 98352,
+            "elf_machine": 62,
+            "name": "lib/x86_64/libdartjni.so",
+            "sha256": "cc231cb01b2beeeb11b87d175693fa8ab6b20cca629eeec8b6041e1e66c3784d"
+          },
+          {
+            "bytes": 6224,
+            "elf_machine": 62,
+            "name": "lib/x86_64/libdatastore_shared_counter.so",
+            "sha256": "fb6c9208988c49ae94943bc3236fa763ba584722e044fa4ea9a12d2941027105"
+          },
+          {
+            "bytes": 38359184,
+            "elf_machine": 62,
+            "name": "lib/x86_64/libflutter.so",
+            "sha256": "39d43f490da0c88fa77dbefa63289c4b02b92b4a953e61d3398645fd5b7ecdc6"
+          },
+          {
+            "bytes": 49416,
+            "elf_machine": 62,
+            "name": "lib/x86_64/libimage_processing_util_jni.so",
+            "sha256": "112703727717651e69e91f3ea2c3c2311737ee5809a909c9d342a811b6c7c069"
+          },
+          {
+            "bytes": 7833048,
+            "elf_machine": 62,
+            "name": "lib/x86_64/librive_native.so",
+            "sha256": "8ad222ac8ea20f9f46a216d66bac37d68b1607cde805439aa87b712a7e6b59e1"
+          },
+          {
+            "bytes": 18232,
+            "elf_machine": 62,
+            "name": "lib/x86_64/libsentry-android.so",
+            "sha256": "2ff0c9f3dc35276e8c88ccc92332e6584a8bea2de3938a1bdb65b8f3023d4100"
+          },
+          {
+            "bytes": 764872,
+            "elf_machine": 62,
+            "name": "lib/x86_64/libsentry.so",
+            "sha256": "51e22f8b7ed6a6bf906028e68643c2f266c135d66d25d4dc4387c62a38a135e1"
+          },
+          {
+            "bytes": 1703640,
+            "elf_machine": 62,
+            "name": "lib/x86_64/libsqlite3.so",
+            "sha256": "51738906518a591f118b18601135bcbcbfa28fbfdfa6a8aeacbff4d875163da0"
+          },
+          {
+            "bytes": 4912,
+            "elf_machine": 62,
+            "name": "lib/x86_64/libsurface_util_jni.so",
+            "sha256": "e5311942b4fce0f7f2505d41150cf9921e558a6368929cb73127450f74dd4fe4"
+          }
+        ],
+        "path": "/home/runner/work/_temp/apk-timing/trees/stock/packages/smooth_app/build/app/outputs/flutter-apk/app-debug.apk",
+        "sha256": "b6f07d1f3aaef14d28b6e9561228cbe4cc9e7105fe856ff986240e2d82e92053",
+        "signing": {
+          "digests": [
+            "d2f41b146199e6514b9ce530070827a0bad1a8a7a72d60e1710dad1027739b80"
+          ],
+          "dns": [
+            "C=US, O=Android, CN=Android Debug"
+          ],
+          "schemes": {
+            "v1": false,
+            "v2": true,
+            "v3": false,
+            "v4": false
+          },
+          "signers": 1,
+          "verifies": true
+        }
+      },
+      "bazel_critical_path": null,
+      "bazel_profile": null,
+      "cache": {
+        "operations": [
+          {
+            "ancestor_identity": "2c6b971dcf319f74db47808069b5819facbb6404:45951449593:1:stock:cold",
+            "archive_bytes": 5133285888,
+            "cap_bytes": 8589934592,
+            "combined_bytes": 5133287767,
+            "command": "pack",
+            "components": [
+              {
+                "archive_bytes": 5133285888,
+                "archive_sha256": "2ebad2e598afca82017dda3c0d91097b9befca20b1299f48fda259563e7f68c9",
+                "base": "tree",
+                "entries": 200686,
+                "file": "stock-cold.tar.zst",
+                "name": "stock-cold",
+                "raw_bytes": 10601225681,
+                "roots": [
+                  {
+                    "base": "runner-temp",
+                    "entries": 21478,
+                    "name": "sdk",
+                    "path": "flutter",
+                    "present": true,
+                    "raw_bytes": 2573009453,
+                    "required": true,
+                    "top_level_directories": []
+                  },
+                  {
+                    "base": "runner-temp",
+                    "entries": 43279,
+                    "name": "pub",
+                    "path": "cache-state/pub",
+                    "present": true,
+                    "raw_bytes": 518380549,
+                    "required": true,
+                    "top_level_directories": []
+                  },
+                  {
+                    "base": "apk-timing",
+                    "entries": 135928,
+                    "name": "gradle-dependency-cache",
+                    "path": "home/.gradle",
+                    "present": true,
+                    "raw_bytes": 7509833061,
+                    "required": false,
+                    "top_level_directories": [
+                      "caches",
+                      "wrapper"
+                    ]
+                  },
+                  {
+                    "base": "apk-timing",
+                    "entries": 1,
+                    "name": "debug-keystore",
+                    "path": "home/.android/debug.keystore",
+                    "present": true,
+                    "raw_bytes": 2618,
+                    "required": false,
+                    "top_level_directories": []
+                  }
+                ]
+              }
+            ],
+            "duration_seconds": 97.947897,
+            "ended_epoch": 1795761455.797067,
+            "ended_monotonic_ns": 635429318357,
+            "engine": "stock",
+            "error": null,
+            "head": "2c6b971dcf319f74db47808069b5819facbb6404",
+            "headroom_bytes": 67108864,
+            "key": "apk-current-45951449593-1-2c6b971dcf319f74db47808069b5819facbb6404-stock-cold",
+            "manifest_bytes": 1879,
+            "manifest_sha256": "04f40553dfdb8a0fcff1e117f62f8bdc8b85b3cfea45f1fbcea5e7159393bf47",
+            "run_attempt": "1",
+            "run_id": "45951449593",
+            "scenario": "cold",
+            "started_epoch": 1795761357.849171,
+            "started_monotonic_ns": 537481421014,
+            "status": "ok"
+          }
+        ],
+        "schema": 1
+      },
+      "conclusion": "success",
+      "engine": "stock",
+      "job_id": 140349726757,
+      "job_ids": [
+        140349726757
+      ],
+      "lock_diff": null,
+      "name": "APK timing / stock / cold / 0",
+      "provider_seconds": 648.0,
+      "remote_cache": null,
+      "repeat": 0,
+      "repository_cache_before": null,
+      "rules_commit": "560dfebee4dfadf9d4199aefe6b953687813a2c8",
+      "runner": {
+        "cpu_count": 4,
+        "cpu_model": "Intel(R) Xeon(R) 6975P-C",
+        "disk_free_bytes_at_prepare": 102347255808,
+        "disk_total_bytes": 154894188544,
+        "machine": "x86_64",
+        "memory_bytes": 16464273408,
+        "os": "Linux-7.0.0-1018-aws-x86_64-with-glibc2.39",
+        "run_image_os": "ubuntu24",
+        "run_image_version": "20261122.23.1",
+        "system": "Linux"
+      },
+      "scenario": "cold",
+      "status": "completed",
+      "timed_build_argv": [
+        "/home/runner/work/_temp/flutter/bin/flutter",
+        "build",
+        "apk",
+        "--debug",
+        "--target-platform",
+        "android-x64",
+        "--target",
+        "lib/entrypoints/android/main_google_play.dart",
+        "--no-pub"
+      ],
+      "validated_apk_seconds": 495.722759,
+      "workflow_clock": {
+        "cache_upload_end_epoch": 1795761495.7475874,
+        "job_start_epoch": 1795760861.6946776,
+        "published_cache": {
+          "created_at": "2026-11-27T06:38:13.497539Z",
+          "id": 11188761434,
+          "key": "apk-current-45951449593-1-2c6b971dcf319f74db47808069b5819facbb6404-stock-cold",
+          "last_accessed_at": "2026-11-27T06:38:13.497539Z",
+          "ref": "refs/heads/ci/benchmark-full-build-log",
+          "size_in_bytes": 5122557233,
+          "version": "debe8ba97745275041f22a4dd7fcefd9084026f56d87dff2e4d0ebe1df34ff82"
+        }
+      }
+    },
+    {
+      "app_commit": "6e7408fda8e46bc97a0d8f2b33a801cf27c8dabe",
+      "artifact": {
+        "badging": {
+          "compileSdk": "36",
+          "debuggable": true,
+          "minSdk": "24",
+          "native_code": [
+            "x86_64"
+          ],
+          "package": "org.openfoodfacts.scanner",
+          "targetSdk": "36",
+          "version_name": "0.0.0"
+        },
+        "byte_identity_gate": false,
+        "bytes": 135292423,
+        "kernel_marker_present": false,
+        "kernel_sha256": "a39fc1778c9ac7202380a233d87b7e77ae07c8070a899243109daca8bf4c1744",
+        "member_count": 964,
+        "native_inventory": [
+          {
+            "bytes": 5909280,
+            "elf_machine": 62,
+            "name": "lib/x86_64/libbarhopper_v3.so",
+            "sha256": "6c5deea87d962af008fd48c3229db13ab68eef2e9feeccb2df5b33a920c0579a"
+          },
+          {
+            "bytes": 98352,
+            "elf_machine": 62,
+            "name": "lib/x86_64/libdartjni.so",
+            "sha256": "cc231cb01b2beeeb11b87d175693fa8ab6b20cca629eeec8b6041e1e66c3784d"
+          },
+          {
+            "bytes": 6224,
+            "elf_machine": 62,
+            "name": "lib/x86_64/libdatastore_shared_counter.so",
+            "sha256": "fb6c9208988c49ae94943bc3236fa763ba584722e044fa4ea9a12d2941027105"
+          },
+          {
+            "bytes": 38359184,
+            "elf_machine": 62,
+            "name": "lib/x86_64/libflutter.so",
+            "sha256": "39d43f490da0c88fa77dbefa63289c4b02b92b4a953e61d3398645fd5b7ecdc6"
+          },
+          {
+            "bytes": 49416,
+            "elf_machine": 62,
+            "name": "lib/x86_64/libimage_processing_util_jni.so",
+            "sha256": "112703727717651e69e91f3ea2c3c2311737ee5809a909c9d342a811b6c7c069"
+          },
+          {
+            "bytes": 7833048,
+            "elf_machine": 62,
+            "name": "lib/x86_64/librive_native.so",
+            "sha256": "8ad222ac8ea20f9f46a216d66bac37d68b1607cde805439aa87b712a7e6b59e1"
+          },
+          {
+            "bytes": 18232,
+            "elf_machine": 62,
+            "name": "lib/x86_64/libsentry-android.so",
+            "sha256": "2ff0c9f3dc35276e8c88ccc92332e6584a8bea2de3938a1bdb65b8f3023d4100"
+          },
+          {
+            "bytes": 764872,
+            "elf_machine": 62,
+            "name": "lib/x86_64/libsentry.so",
+            "sha256": "51e22f8b7ed6a6bf906028e68643c2f266c135d66d25d4dc4387c62a38a135e1"
+          },
+          {
+            "bytes": 1703640,
+            "elf_machine": 62,
+            "name": "lib/x86_64/libsqlite3.so",
+            "sha256": "51738906518a591f118b18601135bcbcbfa28fbfdfa6a8aeacbff4d875163da0"
+          },
+          {
+            "bytes": 4912,
+            "elf_machine": 62,
+            "name": "lib/x86_64/libsurface_util_jni.so",
+            "sha256": "e5311942b4fce0f7f2505d41150cf9921e558a6368929cb73127450f74dd4fe4"
+          }
+        ],
+        "path": "/home/runner/work/_temp/apk-timing/trees/stock/packages/smooth_app/build/app/outputs/flutter-apk/app-debug.apk",
+        "sha256": "b6f07d1f3aaef14d28b6e9561228cbe4cc9e7105fe856ff986240e2d82e92053",
+        "signing": {
+          "digests": [
+            "d2f41b146199e6514b9ce530070827a0bad1a8a7a72d60e1710dad1027739b80"
+          ],
+          "dns": [
+            "C=US, O=Android, CN=Android Debug"
+          ],
+          "schemes": {
+            "v1": false,
+            "v2": true,
+            "v3": false,
+            "v4": false
+          },
+          "signers": 1,
+          "verifies": true
+        }
+      },
+      "bazel_critical_path": null,
+      "bazel_profile": null,
+      "cache": {
+        "operations": [
+          {
+            "ancestor_identity": "2c6b971dcf319f74db47808069b5819facbb6404:45951449593:1:stock:cold",
+            "archive_bytes": 5133285888,
+            "cap_bytes": 8589934592,
+            "combined_bytes": 5133287767,
+            "command": "restore",
+            "components": [
+              {
+                "archive_bytes": 5133285888,
+                "archive_sha256": "2ebad2e598afca82017dda3c0d91097b9befca20b1299f48fda259563e7f68c9",
+                "entries": 200686,
+                "file": "stock-cold.tar.zst",
+                "raw_bytes": 10601225681,
+                "roots": [
+                  {
+                    "base": "runner-temp",
+                    "entries": 21478,
+                    "name": "sdk",
+                    "path": "flutter",
+                    "present": true,
+                    "raw_bytes": 2573009453,
+                    "required": true,
+                    "top_level_directories": []
+                  },
+                  {
+                    "base": "runner-temp",
+                    "entries": 43279,
+                    "name": "pub",
+                    "path": "cache-state/pub",
+                    "present": true,
+                    "raw_bytes": 518380549,
+                    "required": true,
+                    "top_level_directories": []
+                  },
+                  {
+                    "base": "apk-timing",
+                    "entries": 135928,
+                    "name": "gradle-dependency-cache",
+                    "path": "home/.gradle",
+                    "present": true,
+                    "raw_bytes": 7509833061,
+                    "required": false,
+                    "top_level_directories": [
+                      "caches",
+                      "wrapper"
+                    ]
+                  },
+                  {
+                    "base": "apk-timing",
+                    "entries": 1,
+                    "name": "debug-keystore",
+                    "path": "home/.android/debug.keystore",
+                    "present": true,
+                    "raw_bytes": 2618,
+                    "required": false,
+                    "top_level_directories": []
+                  }
+                ]
+              }
+            ],
+            "duration_seconds": 82.356702,
+            "ended_epoch": 1795761670.272379,
+            "ended_monotonic_ns": 307854039087,
+            "engine": "stock",
+            "error": null,
+            "head": "2c6b971dcf319f74db47808069b5819facbb6404",
+            "headroom_bytes": 67108864,
+            "key": "apk-current-45951449593-1-2c6b971dcf319f74db47808069b5819facbb6404-stock-cold",
+            "manifest_bytes": 1879,
+            "manifest_sha256": "04f40553dfdb8a0fcff1e117f62f8bdc8b85b3cfea45f1fbcea5e7159393bf47",
+            "run_attempt": "1",
+            "run_id": "45951449593",
+            "scenario": "warm",
+            "started_epoch": 1795761587.9156783,
+            "started_monotonic_ns": 225497337413,
+            "status": "ok"
+          },
+          {
+            "command": "pack",
+            "components": [],
+            "duration_seconds": 8.4e-05,
+            "ended_epoch": 1795761849.9079654,
+            "ended_monotonic_ns": 487489623844,
+            "engine": "stock",
+            "error": null,
+            "head": "2c6b971dcf319f74db47808069b5819facbb6404",
+            "reason": "only cold repeat 0 publishes the engine seed",
+            "run_attempt": "1",
+            "run_id": "45951449593",
+            "scenario": "warm",
+            "started_epoch": 1795761849.907881,
+            "started_monotonic_ns": 487489540038,
+            "status": "skipped"
+          }
+        ],
+        "schema": 1
+      },
+      "conclusion": "success",
+      "engine": "stock",
+      "job_id": 140353399731,
+      "job_ids": [
+        140353399731
+      ],
+      "lock_diff": null,
+      "name": "APK timing / stock / warm / 0",
+      "provider_seconds": 359.0,
+      "remote_cache": null,
+      "repeat": 0,
+      "repository_cache_before": null,
+      "rules_commit": "560dfebee4dfadf9d4199aefe6b953687813a2c8",
+      "runner": {
+        "cpu_count": 4,
+        "cpu_model": "AMD EPYC 9V45 96-Core Processor",
+        "disk_free_bytes_at_prepare": 98898911232,
+        "disk_total_bytes": 154894188544,
+        "machine": "x86_64",
+        "memory_bytes": 16760320000,
+        "os": "Linux-7.0.0-1020-azure-x86_64-with-glibc2.39",
+        "run_image_os": "ubuntu24",
+        "run_image_version": "20261122.23.1",
+        "system": "Linux"
+      },
+      "scenario": "warm",
+      "status": "completed",
+      "timed_build_argv": [
+        "/home/runner/work/_temp/flutter/bin/flutter",
+        "build",
+        "apk",
+        "--debug",
+        "--target-platform",
+        "android-x64",
+        "--target",
+        "lib/entrypoints/android/main_google_play.dart",
+        "--no-pub"
+      ],
+      "validated_apk_seconds": 339.6009,
+      "workflow_clock": {
+        "cache_download_end_epoch": 1795761587.7219274,
+        "cache_download_start_epoch": 1795761540.7241483,
+        "cache_expected_key": "apk-current-45951449593-1-2c6b971dcf319f74db47808069b5819facbb6404-stock-cold",
+        "cache_hit": true,
+        "cache_matched_key": "apk-current-45951449593-1-2c6b971dcf319f74db47808069b5819facbb6404-stock-cold",
+        "job_start_epoch": 1795761510.0247698
+      }
+    },
+    {
+      "conclusion": "failure",
+      "evidence_error": "job did not succeed",
+      "job_id": 140349726787,
+      "job_ids": [
+        140349726787
+      ],
+      "name": "APK timing / bazel / cold / 0",
+      "provider_seconds": 269.0,
+      "status": "completed"
+    },
+    {
+      "evidence_error": "missing or duplicate job",
+      "job_ids": [],
+      "name": "APK timing / bazel / warm / 0"
+    },
+    {
+      "evidence_error": "missing or duplicate job",
+      "job_ids": [],
+      "name": "APK timing / bazel / lib / 0"
+    }
+  ],
+  "rules_commit": "560dfebee4dfadf9d4199aefe6b953687813a2c8",
+  "run_attempt": 1,
+  "run_id": "45951449593",
+  "runner_class": "ubuntu-24.04 standard public runner",
+  "runner_observations": [
+    {
+      "job": "APK timing / stock / cold / 0",
+      "memory_bytes": 16464273408,
+      "vcpus": 4
+    },
+    {
+      "job": "APK timing / stock / warm / 0",
+      "memory_bytes": 16760320000,
+      "vcpus": 4
+    },
+    {
+      "job": "APK timing / bazel / cold / 0",
+      "memory_bytes": null,
+      "vcpus": null
+    },
+    {
+      "job": "APK timing / bazel / warm / 0",
+      "memory_bytes": null,
+      "vcpus": null
+    },
+    {
+      "job": "APK timing / bazel / lib / 0",
+      "memory_bytes": null,
+      "vcpus": null
+    }
+  ],
+  "seed_cache_proofs": [
+    {
+      "combined_bytes": 5133287767,
+      "engine": "stock",
+      "gradle_top_level_directories": [
+        "caches",
+        "wrapper"
+      ]
+    },
+    {
+      "combined_bytes": null,
+      "engine": "bazel",
+      "gradle_top_level_directories": []
+    }
+  ],
+  "valid": false,
+  "workflow_commit": "2c6b971dcf319f74db47808069b5819facbb6404"
+}
