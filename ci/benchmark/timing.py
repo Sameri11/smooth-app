@@ -37,11 +37,19 @@ def flutter_pin():
     version = json.loads((APP_ROOT / ".fvmrc").read_text()).get("flutter")
     if not isinstance(version, str) or not version:
         raise RuntimeError("app .fvmrc has no Flutter version")
-    result = subprocess.run(["git", "-C", str(SDK), "rev-parse", "HEAD"],
+    result = subprocess.run([str(SDK / "bin/flutter"), "--version", "--machine"],
         text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     if result.returncode:
-        raise RuntimeError("installed Flutter SDK has no readable revision")
-    return {"version": version, "revision": result.stdout.strip()}
+        raise RuntimeError("could not read installed Flutter SDK version")
+    try:
+        sdk = json.loads(result.stdout)
+        sdk_version = sdk["frameworkVersion"]
+        revision = sdk["frameworkRevision"]
+    except (json.JSONDecodeError, KeyError, TypeError) as error:
+        raise RuntimeError("installed Flutter SDK has incomplete machine version output") from error
+    if sdk_version != version or not isinstance(revision, str) or not revision:
+        raise RuntimeError("installed Flutter SDK does not match the app .fvmrc pin")
+    return {"version": version, "revision": revision}
 RESOURCE_SAMPLE_SECONDS = 1.0
 LIB_REL = "packages/smooth_app/lib/helpers/string_extension.dart"
 MARKER = b"_removeSpacesPattern"
