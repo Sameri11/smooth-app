@@ -328,24 +328,50 @@ def dispatch_head():
     return head
 
 
-def tracked_source_fingerprint(root: Path):
+def tracked_source_inventory(root: Path):
     listing = subprocess.run(
         ["git", "-C", str(WS), "ls-files", "-z", "--", "packages/smooth_app", "packages/app_store",
          "packages/scanner", "MODULE.bazel", "MODULE.bazel.lock", "plugin_deps.MODULE.bazel",
          ".bazelversion"],
         check=True, stdout=subprocess.PIPE).stdout.split(b"\0")
-    rows = []
-    for raw in listing:
-        if not raw:
+    return {
+        raw.decode("utf-8", "surrogateescape"): file_hash(root / raw.decode("utf-8", "surrogateescape"))
+        for raw in listing if raw
+    }
+
+
+def fingerprint_source_inventory(files):
+    data = b"".join(
+        rel.encode("utf-8", "surrogateescape") + b"\0" + (sha or "missing").encode() + b"\n"
+        for rel, sha in sorted(files.items()))
+    return {"count": len(files), "sha256": digest(data)}
+
+
+def tracked_source_fingerprint(root: Path):
+    return fingerprint_source_inventory(tracked_source_inventory(root))
+
+
+def tracked_source_diagnostics(before, after, root: Path):
+    changed = sorted(path for path in before.keys() | after.keys()
+                     if before.get(path) != after.get(path))
+    diffs = []
+    for rel in changed[:12]:
+        original, current = WS / rel, root / rel
+        if not original.is_file() or not current.is_file():
+            diffs.append(f"--- {rel}: original={original.is_file()} current={current.is_file()}")
             continue
-        rel = raw.decode("utf-8", "surrogateescape")
-        path = root / rel
-        sha = file_hash(path)
-        if sha is None:
-            raise RuntimeError(f"tracked source missing: {rel}")
-        rows.append((rel, sha))
-    data = b"".join(rel.encode("utf-8", "surrogateescape") + b"\0" + sha.encode() + b"\n" for rel, sha in rows)
-    return {"count": len(rows), "sha256": digest(data)}
+        try:
+            original_lines = original.read_text(errors="replace").splitlines(keepends=True)
+            current_lines = current.read_text(errors="replace").splitlines(keepends=True)
+            diff = list(difflib.unified_diff(original_lines, current_lines,
+                fromfile=f"a/{rel}", tofile=f"b/{rel}", n=2))
+        except OSError as error:
+            diffs.append(f"--- {rel}: could not read diff: {error}")
+            continue
+        diffs.extend(line.rstrip("\n") for line in diff[:24])
+        if len(diff) > 24:
+            diffs.append("... diff truncated ...")
+    return changed, diffs
 
 
 
@@ -442,6 +468,11 @@ def cmd_prepare(args):
                 or not isinstance(lock_metadata.get("diff_stat"), str)):
             raise RuntimeError("prepared module lock metadata does not match its payload")
         (tree / "MODULE.bazel.lock").write_bytes(lock_bytes)
+    source_inventory = tracked_source_inventory(tree)
+    missing_source = [path for path, sha in source_inventory.items() if sha is None]
+    if missing_source:
+        raise RuntimeError("tracked source missing before build: " + ", ".join(missing_source[:12]))
+    json_write(ROOT / "tracked-source-before.json", source_inventory)
     repeat = int(os.environ.get("APK_REPEAT", "0"))
     app_commit = identity(WS)
     identity_row = {"head": head, "workflow_commit": head, "app_commit": app_commit,
@@ -459,7 +490,7 @@ def cmd_prepare(args):
                               "compile_sdk": 36, "build_tools": "36.0.0", "ndk": "28.2.13676358",
                               "java": 17, "lockfile_mode": "error"},
              "phases": [], "commands": [], "errors": [],
-             "tree": str(tree), "tracked_source": tracked_source_fingerprint(tree),
+             "tree": str(tree), "tracked_source": fingerprint_source_inventory(source_inventory),
              "lock_diff": lock_metadata, "artifact": None, "cache_metrics": None}
     if download_outputs:
         state["output_policy"] = policy_references(state["identity"], os.environ)
@@ -995,12 +1026,20 @@ def cmd_run(args):
             if not state["mutation"]["restored_exact"]:
                 state["status"] = "failed"
                 state["failure"] = {"type": "RuntimeError", "message": "edited source restoration hash mismatch"}
-        actual_sources = tracked_source_fingerprint(tree)
+        actual_inventory = tracked_source_inventory(tree)
+        actual_sources = fingerprint_source_inventory(actual_inventory)
+        before_inventory = json.loads((ROOT / "tracked-source-before.json").read_text())
+        changed_paths, source_diffs = tracked_source_diagnostics(
+            before_inventory, actual_inventory, tree)
         state["source_check"] = {"expected": state["tracked_source"], "actual": actual_sources,
-                                 "changed": actual_sources != state["tracked_source"]}
+                                 "changed": actual_sources != state["tracked_source"],
+                                 "changed_paths": changed_paths, "short_diffs": source_diffs}
         if state["source_check"]["changed"]:
+            details = "\n".join([*changed_paths, *source_diffs])
+            print("tracked consumer source changed during build:\n" + details, file=sys.stderr)
             state["status"] = "failed"
-            state["failure"] = {"type": "RuntimeError", "message": "tracked consumer source changed during build"}
+            state["failure"] = {"type": "RuntimeError",
+                                "message": "tracked consumer source changed during build: " + details[:1200]}
         clock = ROOT / "workflow-clock.json"
         if clock.is_file():
             state["workflow_clock"] = json.loads(clock.read_text())
