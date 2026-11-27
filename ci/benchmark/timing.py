@@ -620,7 +620,8 @@ def apply_library_edit(path):
 
 
 def native_inventory(apk):
-    records, names_seen = [], set()
+    records, names_seen, native_abis = [], set(), set()
+    abi_elf = {"armeabi-v7a": (1, 40), "arm64-v8a": (2, 183), "x86_64": (2, X86_64_MACHINE)}
     with zipfile.ZipFile(apk) as zf:
         for info in zf.infolist():
             name = info.filename
@@ -629,16 +630,19 @@ def native_inventory(apk):
             names_seen.add(name)
             if name.startswith("lib/") and name.endswith(".so"):
                 data = zf.read(info)
-                if len(data) < 20 or data[:6] != b"\x7fELF\x02\x01":
-                    raise RuntimeError(f"invalid ELF64 little-endian native: {name}")
-                machine = struct.unpack_from("<H", data, 18)[0]
-                if machine != X86_64_MACHINE or not name.startswith("lib/x86_64/"):
-                    raise RuntimeError(f"native ABI/machine mismatch: {name} machine={machine}")
-                records.append({"name": name, "bytes": len(data), "sha256": digest(data), "elf_machine": machine})
+                parts = name.split("/")
+                abi = parts[1] if len(parts) >= 3 else ""
+                expected = abi_elf.get(abi)
+                if (len(data) < 20 or data[:4] != b"\x7fELF" or data[5] != 1
+                        or expected is None or (data[4], struct.unpack_from("<H", data, 18)[0]) != expected):
+                    raise RuntimeError(f"native ABI/machine mismatch: {name}")
+                native_abis.add(abi)
+                records.append({"name": name, "bytes": len(data), "sha256": digest(data),
+                                "elf_class": data[4], "elf_machine": expected[1]})
         required = {"assets/flutter_assets/kernel_blob.bin", "classes.dex", "lib/x86_64/libflutter.so"}
         if required - names_seen: raise RuntimeError("required APK members absent")
         if any(name.endswith("libapp.so") for name in names_seen): raise RuntimeError("libapp.so present; expected debug kernel APK")
-    return records, names_seen
+    return records, names_seen, native_abis
 
 
 def validate_apk(engine, tree, scenario, state):
@@ -653,11 +657,13 @@ def validate_apk(engine, tree, scenario, state):
     for key, val in APK_BADGING_EXPECTED.items():
         if facts.get(key) != val:
             raise RuntimeError(f"APK badging {key}={facts.get(key)!r}, expected {val!r}")
-    if facts["native_code"] != ["x86_64"] or not facts["debuggable"]:
-        raise RuntimeError("APK is not the expected x86_64 debug package")
+    if not facts["debuggable"]:
+        raise RuntimeError("APK is not debuggable")
     if not sig["verifies"] or not (sig["schemes"].get("v2") or sig["schemes"].get("v3")) or sig["signers"] != 1:
         raise RuntimeError("APK signature verification failed")
-    natives, members = native_inventory(apk)
+    natives, members, native_abis = native_inventory(apk)
+    if "x86_64" not in native_abis or set(facts["native_code"]) != native_abis:
+        raise RuntimeError(f"APK native ABIs {facts['native_code']!r} do not match ELF members {sorted(native_abis)!r}")
     kernel = zipfile.ZipFile(apk).read("assets/flutter_assets/kernel_blob.bin")
     marker = MARKER in kernel
     if scenario == "lib" and not marker:
