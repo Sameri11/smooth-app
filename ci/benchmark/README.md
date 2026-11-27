@@ -49,15 +49,17 @@ At n≥3, an engine is faster only when its validated-APK median is at least 10 
 
 ## Current baseline
 
-Run `44767702298` (`results/44767702298-1.json` on `benchmark-results`): workflow commit `44be453`, app revision `6e7408f`, rules_flutter `6ab5ab9`, 4 vCPU / 16 GiB public runners, three repeats, clean-build stock warm. The Dart edit row compares Bazel edit rows against stock warm rows.
+Run `45988469123` (`results/45988469123-1.json` on `benchmark-results`): workflow commit `d9e80fb`, app revision `4c5f148`, rules_flutter `55c8a63`, Flutter 3.47.3, 4 vCPU / 16 GiB public runners, three repeats, `valid: true`. The Dart edit row compares Bazel edit rows against stock warm rows.
 
-| Scenario | Stock validated APK median (rows) | Bazel validated APK median (rows) | Full-job medians (stock / Bazel) | Bazel critical path median | Result |
+| Scenario | Stock validated APK median (range) | Bazel validated APK median (range) | Full-job medians (stock / Bazel) | Bazel critical path median | Result |
 |---|---|---|---|---|---|
-| Cold | 591.7 s (591.7, 503.9, 625.7) | 840.3 s (840.3, 810.8, 1039.3) | 644 / 914 s | 524.7 s | Stock faster |
-| Warm | 371.2 s (313.1, 371.2, 413.3) | 288.6 s (299.2, 226.3, 288.6) | 384 / 317 s | 27.6 s | Bazel faster |
-| Dart edit | 371.2 s (stock warm rows) | 348.5 s (348.5, 373.8, 305.6) | 384 / 371 s | 105.5 s | No clear difference |
+| Cold | 480.3 s [460.1, 595.5] | 805.2 s [785.2, 870.4] | 597 / 857 s | 534.77 s | Stock faster |
+| Warm | 385.0 s [343.6, 415.9] | 271.0 s [257.3, 297.7] | 408 / 290 s | 66.91 s | Bazel faster |
+| Dart edit | 385.0 s (stock warm rows) | 324.0 s [321.6, 384.3] | 408 / 352 s | 129.09 s | No clear difference |
 
-Stock used 6 jobs and 55 rounded minutes, Bazel 9 jobs and 86; the 4-core cost proxies were $0.66 and $1.03. Seeds were 5.13 GB (stock) and 1.92 GB (Bazel). Bazel cold/warm APKs were all `749a34170ea8…` and edit APKs `e24aefe28e6a…`, the same digests as the historical baseline. Stock warm matched cold/0, and independent cold jobs had equal unsigned identity and different debug signers.
+The Bazel APK SHA-256 is `d7c3295e543c91bd16c99325181debd5517f51231d1f28cd16fd6a25ea694d12` for cold and warm, and `7c74e34582fa17a9cf37d9c5d6902b2597ddc07e0dd5be4dad5399c62888640d` for the Dart edit. The harness now derives Flutter from the app's `.fvmrc`, reports changed-path diagnostics when tracked source changes during a build, and validates stock APK native libraries against their declared ABI inventory.
+
+Stock used 6 jobs and 51 rounded minutes, Bazel 9 jobs and 80; the 4-core cost proxies were $0.612 and $0.96. Seeds were 5.13 GB (stock) and 1.92 GB (Bazel). Stock warm matched cold/0, and independent cold jobs had equal unsigned identity and different debug signers.
 
 ## Historical baseline
 
