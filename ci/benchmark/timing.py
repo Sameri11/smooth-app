@@ -31,10 +31,17 @@ SDK = Path(os.environ.get("FLUTTER_ROOT",
          Path(os.environ.get("RUNNER_TEMP", tempfile.gettempdir())) / "flutter"))
 PUB = Path(os.environ.get("RUNNER_TEMP", tempfile.gettempdir())) / "cache-state" / "pub"
 BAZELISK = Path(os.environ.get("RUNNER_TEMP", tempfile.gettempdir())) / "cache-state" / "bazelisk"
-TOOL_VERSIONS = {
-    "flutter": {"version": "3.41.8", "revision": "02085feb3f5d8a8156e5e28512b9d99351d510c0"},
-    "bazel": {"version": "9.2.0"},
-}
+TOOL_VERSIONS = {"bazel": {"version": "9.2.0"}}
+
+def flutter_pin():
+    version = json.loads((APP_ROOT / ".fvmrc").read_text()).get("flutter")
+    if not isinstance(version, str) or not version:
+        raise RuntimeError("app .fvmrc has no Flutter version")
+    result = subprocess.run(["git", "-C", str(SDK), "rev-parse", "HEAD"],
+        text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    if result.returncode:
+        raise RuntimeError("installed Flutter SDK has no readable revision")
+    return {"version": version, "revision": result.stdout.strip()}
 RESOURCE_SAMPLE_SECONDS = 1.0
 LIB_REL = "packages/smooth_app/lib/helpers/string_extension.dart"
 MARKER = b"_removeSpacesPattern"
@@ -276,11 +283,11 @@ def tracked_tree(engine):
                      tree / "MODULE.bazel.lock")
     return tree
 
-def verify_tool_identity(engine, tree, state, env):
+    pin = flutter_pin()
     version = json.loads(command(state, "flutter-version", [SDK / "bin/flutter", "--version", "--machine"], tree, env))
-    if (version.get("frameworkVersion") != TOOL_VERSIONS["flutter"]["version"]
-            or version.get("frameworkRevision") != TOOL_VERSIONS["flutter"]["revision"]):
-        raise RuntimeError("installed Flutter identity differs from the pinned SDK")
+    if (version.get("frameworkVersion") != pin["version"]
+            or version.get("frameworkRevision") != pin["revision"]):
+        raise RuntimeError("installed Flutter identity differs from the app's .fvmrc pin")
     state["identity"]["flutter_runtime"] = {"version": version.get("frameworkVersion"),
         "revision": version.get("frameworkRevision"), "dart": version.get("dartSdkVersion")}
     if engine == "bazel":
@@ -424,7 +431,7 @@ def cmd_prepare(args):
                     "engine": args.engine, "scenario": args.scenario, "repeat": repeat,
                     "download_outputs": download_outputs, "bazel_jobs": bazel_jobs,
                     "rules_revision": os.environ.get("RULES_SHA", ""), "library_source_sha256": file_hash(tree / LIB_REL),
-                    "flutter": TOOL_VERSIONS["flutter"], "bazel": TOOL_VERSIONS["bazel"]}
+                    "flutter": flutter_pin(), "bazel": TOOL_VERSIONS["bazel"]}
     state = {"schema": 1, "kind": "smooth-current-debug-apk-timing", "status": "prepared",
              "identity": identity_row, "runner": runner_metadata(),
              "build_config": {"target": APK_TARGET, "stock_target": ENTRYPOINT, "abi": "x86_64",

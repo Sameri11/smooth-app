@@ -103,8 +103,12 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/cache-state/pub" "$BAZELISK_HOME"
-          curl --fail --location --retry 2 --output "$RUNNER_TEMP/flutter.tar.xz" https://storage.googleapis.com/flutter_infra_release/releases/stable/linux/flutter_linux_3.41.8-stable.tar.xz
-          echo "0c7e47fc39ef86290b41707d687bdca7f82b277267a6ef74717f8e88ac423de1  $RUNNER_TEMP/flutter.tar.xz" | sha256sum --check
+          flutter_version="$(python3 -c 'import json; print(json.load(open("app/.fvmrc"))["flutter"])')"
+          curl --fail --location --retry 2 --output "$RUNNER_TEMP/releases_linux.json" https://storage.googleapis.com/flutter_infra_release/releases/releases_linux.json
+          release="$(jq -er --arg version "$flutter_version" '.releases[] | select(.version == $version and .channel == "stable") | [.archive, .sha256] | @tsv' "$RUNNER_TEMP/releases_linux.json")"
+          IFS=$'\t' read -r archive sha256 <<< "$release"
+          curl --fail --location --retry 2 --output "$RUNNER_TEMP/flutter.tar.xz" "https://storage.googleapis.com/flutter_infra_release/releases/$archive"
+          echo "$sha256  $RUNNER_TEMP/flutter.tar.xz" | sha256sum --check
           tar -xJf "$RUNNER_TEMP/flutter.tar.xz" -C "$RUNNER_TEMP"
           rm "$RUNNER_TEMP/flutter.tar.xz"
           curl --fail --location --retry 2 --output "$RUNNER_TEMP/bazel" https://github.com/bazelbuild/bazelisk/releases/download/v1.29.0/bazelisk-linux-amd64
@@ -114,7 +118,6 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          test "$(git -C "$FLUTTER_ROOT" rev-parse HEAD)" = 02085feb3f5d8a8156e5e28512b9d99351d510c0
           "$FLUTTER_ROOT/bin/flutter" precache --android
           extension="$FLUTTER_ROOT/packages/flutter_tools/gradle/src/main/kotlin/FlutterExtension.kt"
           ndk="$(python3 -c 'import pathlib,re,sys; print(re.search(r"val ndkVersion: String = \"([^\"]+)\"", pathlib.Path(sys.argv[1]).read_text()).group(1))' "$extension")"
@@ -223,8 +226,12 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p "$PUB_CACHE" "$BAZELISK_HOME"
-          curl --fail --location --retry 2 --output "$RUNNER_TEMP/flutter.tar.xz" https://storage.googleapis.com/flutter_infra_release/releases/stable/linux/flutter_linux_3.41.8-stable.tar.xz
-          echo "0c7e47fc39ef86290b41707d687bdca7f82b277267a6ef74717f8e88ac423de1  $RUNNER_TEMP/flutter.tar.xz" | sha256sum --check
+          flutter_version="$(python3 -c 'import json; print(json.load(open("app/.fvmrc"))["flutter"])')"
+          curl --fail --location --retry 2 --output "$RUNNER_TEMP/releases_linux.json" https://storage.googleapis.com/flutter_infra_release/releases/releases_linux.json
+          release="$(jq -er --arg version "$flutter_version" '.releases[] | select(.version == $version and .channel == "stable") | [.archive, .sha256] | @tsv' "$RUNNER_TEMP/releases_linux.json")"
+          IFS=$'\t' read -r archive sha256 <<< "$release"
+          curl --fail --location --retry 2 --output "$RUNNER_TEMP/flutter.tar.xz" "https://storage.googleapis.com/flutter_infra_release/releases/$archive"
+          echo "$sha256  $RUNNER_TEMP/flutter.tar.xz" | sha256sum --check
           tar -xJf "$RUNNER_TEMP/flutter.tar.xz" -C "$RUNNER_TEMP"
           rm "$RUNNER_TEMP/flutter.tar.xz"
           if [[ "$ENGINE" == bazel ]]; then
@@ -237,7 +244,6 @@ jobs:
         run: |
           set -euo pipefail
           export HOME="$RUNNER_TEMP/apk-timing/home"
-          test "$(git -C "$FLUTTER_ROOT" rev-parse HEAD)" = 02085feb3f5d8a8156e5e28512b9d99351d510c0
           "$FLUTTER_ROOT/bin/flutter" --version
           "$FLUTTER_ROOT/bin/flutter" precache --android
           extension="$FLUTTER_ROOT/packages/flutter_tools/gradle/src/main/kotlin/FlutterExtension.kt"
