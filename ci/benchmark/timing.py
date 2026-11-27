@@ -300,6 +300,7 @@ def tracked_tree(engine):
                      tree / "MODULE.bazel.lock")
     return tree
 
+def verify_tool_identity(engine, tree, state, env):
     pin = flutter_pin()
     version = json.loads(command(state, "flutter-version", [SDK / "bin/flutter", "--version", "--machine"], tree, env))
     if (version.get("frameworkVersion") != pin["version"]
