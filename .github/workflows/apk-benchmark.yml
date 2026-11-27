@@ -125,6 +125,13 @@ jobs:
         id: probe
         shell: bash
         run: python3 benchmark-source/ci/benchmark/timing.py prepare-lock
+      - name: Upload Bazel logs
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: bazel-logs-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}
+          path: ${{ runner.temp }}/apk-timing/logs/bazel-*.log
+          if-no-files-found: ignore
 
   cold-stock-0:
     name: APK timing / stock / cold / 0
@@ -304,9 +311,10 @@ jobs:
         run: |
           root="$RUNNER_TEMP/apk-timing"
           base="$root/bazel-output-base"
+          mkdir -p "$root/logs"
           if [[ -x "$RUNNER_TEMP/bazel" && -d "$base/server" ]]; then
             cd "$root/trees/bazel"
-            HOME="$root/home" timeout 30 "$RUNNER_TEMP/bazel" --nosystem_rc --nohome_rc --noworkspace_rc --output_base="$base" shutdown
+            HOME="$root/home" timeout 30 "$RUNNER_TEMP/bazel" --nosystem_rc --nohome_rc --noworkspace_rc --output_base="$base" shutdown > "$root/logs/bazel-shutdown.log" 2>&1
           fi
       - name: Emit compact evidence without artifacts
         if: always()
@@ -318,6 +326,13 @@ jobs:
         shell: bash
         env: { APK_TIMING_JOB_STATUS: '${{ job.status }}' }
         run: python3 benchmark-source/ci/benchmark/timing.py verify --engine "$ENGINE" --scenario "$SCENARIO"
+      - name: Upload Bazel logs
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: bazel-logs-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}
+          path: ${{ runner.temp }}/apk-timing/logs/bazel-*.log
+          if-no-files-found: ignore
 
   cold-bazel-0:
     name: APK timing / bazel / cold / 0

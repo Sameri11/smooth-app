@@ -123,7 +123,8 @@ def save(state):
 def phase(state, name):
     @contextlib.contextmanager
     def measured():
-        row = {"name": name, "start_epoch": time.time(), "start_monotonic": time.monotonic(), "status": "running"}
+        row = {"name": name, "start_epoch": time.time(), "start_monotonic": time.monotonic(),
+               "excluded_logging_seconds": 0.0, "status": "running"}
         state.setdefault("phases", []).append(row)
         save(state)
         try:
@@ -136,7 +137,8 @@ def phase(state, name):
             row["status"] = "complete"
         finally:
             row["end_epoch"] = time.time()
-            row["duration_seconds"] = round(time.monotonic() - row["start_monotonic"], 6)
+            row["duration_seconds"] = round(
+                time.monotonic() - row["start_monotonic"] - row["excluded_logging_seconds"], 6)
             save(state)
     return measured()
 
@@ -169,6 +171,12 @@ def network_429_urls(output):
     ))
     return sorted(failed)
 
+
+def write_bazel_log(name, output):
+    path = ROOT / "logs" / f"bazel-{name}.log"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(output or "", encoding="utf-8")
+    return path
 
 def command(state, name, argv, cwd, env, timeout=3600, *, output_limit=5000,
             sample_resources=False):
@@ -229,10 +237,23 @@ def command(state, name, argv, cwd, env, timeout=3600, *, output_limit=5000,
         secret = os.environ.get(key)
         if secret:
             text = text.replace(secret, "[REDACTED]")
+    duration_seconds = round(time.monotonic() - start_mono, 6)
+    log_path = None
+    if Path(safe_argv[0]).name == "bazel":
+        log_index = len(state.get("commands", []))
+        log_start = time.monotonic()
+        log_path = write_bazel_log(
+            f"{log_index:02d}-{re.sub(r'[^A-Za-z0-9_.-]', '-', name)}", text)
+        for phase_row in reversed(state.get("phases", [])):
+            if phase_row["status"] == "running":
+                phase_row["excluded_logging_seconds"] += time.monotonic() - log_start
+                break
     end_epoch = time.time()
     row = {"name": name, "argv": stored_argv, "cwd": str(cwd), "start_epoch": start_epoch,
-           "end_epoch": end_epoch, "duration_seconds": round(time.monotonic() - start_mono, 6),
+           "end_epoch": end_epoch, "duration_seconds": duration_seconds,
            "exit_code": rc, "output_tail": text[-output_limit:]}
+    if log_path:
+        row["output_log"] = str(log_path)
     if name == "bazel-build-apk":
         failed_urls = network_429_urls(text)
         row["network_429_urls"] = failed_urls
@@ -1063,6 +1084,7 @@ def cmd_prepare_lock(_args):
                        output_base=output_base, repository_cache=repository_cache,
                        lockfile_mode="error"),
             cwd=tree, env=env, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        write_bazel_log("prepare-lock-error", result.stdout)
         regenerated = False
         if result.returncode:
             result = subprocess.run(
@@ -1070,6 +1092,7 @@ def cmd_prepare_lock(_args):
                            output_base=output_base, repository_cache=repository_cache,
                            lockfile_mode="update"),
                 cwd=tree, env=env, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+            write_bazel_log("prepare-lock-update", result.stdout)
             regenerated = result.returncode == 0
         if result.returncode:
             raise RuntimeError("Bazel module lock probe/update failed: " + result.stdout[-4000:])
@@ -1078,6 +1101,7 @@ def cmd_prepare_lock(_args):
             [str(bazel), "--nosystem_rc", "--nohome_rc", "--noworkspace_rc",
              "--output_base=" + str(output_base), "shutdown"],
             cwd=tree, env=env, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        write_bazel_log("prepare-lock-shutdown", shutdown.stdout)
         shutil.rmtree(scratch, ignore_errors=True)
         if shutdown.returncode:
             raise RuntimeError("Bazel module-lock server shutdown failed: " + shutdown.stdout[-2000:])
